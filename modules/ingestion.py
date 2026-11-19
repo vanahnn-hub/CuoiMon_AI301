@@ -58,8 +58,9 @@ def load_google_sheet(url: str) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
             except Exception as e:
                 return None, f"Không thể đọc nội dung bảng tính: {str(e)}"
 
-        if df is None or df.empty or len(df.columns) == 0:
-            return None, "Lỗi Bảng Tính Trống: Bảng tính Google Sheet không chứa hàng hoặc cột dữ liệu nào."
+        ok, err = validate_dataframe_has_data(df)
+        if not ok:
+            return None, err
         return df, None
     except requests.exceptions.Timeout:
         return None, "Lỗi Hết Thời Gian Chờ (Timeout): Máy chủ phản hồi quá lâu khi tải bảng tính từ Google. Vui lòng kiểm tra lại đường truyền mạng và thử lại."
@@ -68,33 +69,142 @@ def load_google_sheet(url: str) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     except Exception as e:
         return None, f"Lỗi Xử Lý Google Sheet: {str(e)}"
 
+def validate_dataframe_has_data(df: Optional[pd.DataFrame]) -> Tuple[bool, Optional[str]]:
+    """
+    Kiểm định tệp dữ liệu đầu vào theo ĐÚNG 6 trường hợp người dùng quy định:
+    1. File rỗng (0 dòng, 0 cột, hoặc toàn bộ là ô trống)
+    2. Vượt quá 20.000 dòng
+    3. Vượt quá 200 cột
+    4. Dữ liệu không có ý nghĩa (bảng chỉ có 1 dòng, hoặc toàn bộ ô chứa 1 giá trị duy nhất không có biến thiên)
+    5. Sai định dạng (được kiểm tra ở tầng đọc file)
+    6. Chưa mở quyền truy cập (được kiểm tra ở tầng đọc file/URL)
+
+    Ngoài 6 trường hợp trên, mọi tệp hợp lệ khác ĐỀU ĐƯỢC CHẤP NHẬN.
+    """
+    # 1. Kiểm tra File rỗng
+    if df is None or df.empty or len(df.columns) == 0 or len(df) == 0:
+        return False, "Lỗi Tệp Rỗng: Tệp tải lên hoàn toàn không có dữ liệu (0 dòng hoặc 0 cột)."
+
+    # 2. Kiểm tra Vượt quá 200 cột
+    MAX_ALLOWED_COLS = 200
+    if len(df.columns) > MAX_ALLOWED_COLS:
+        return False, (
+            f"Lỗi Vượt Quá 200 Cột: Tệp chứa {len(df.columns)} cột, "
+            f"vượt quá giới hạn tối đa cho phép ({MAX_ALLOWED_COLS} cột)."
+        )
+
+    # 3. Kiểm tra Vượt quá 20.000 dòng
+    MAX_ALLOWED_ROWS = 20000
+    if len(df) > MAX_ALLOWED_ROWS:
+        return False, (
+            f"Lỗi Vượt Quá 20.000 Dòng: Tệp chứa {len(df):,} dòng dữ liệu, "
+            f"vượt quá giới hạn tối đa cho phép ({MAX_ALLOWED_ROWS:,} dòng)."
+        )
+
+    # 4. Kiểm tra dữ liệu rỗng sau khi loại bỏ dòng trống
+    non_empty = df.dropna(how='all')
+    if non_empty.empty or len(non_empty) == 0:
+        return False, "Lỗi Tệp Rỗng: Tất cả các dòng trong bảng tính đều là ô trống (không có dữ liệu)."
+
+    # 5. Kiểm tra Dữ liệu không có ý nghĩa
+    # a. Quá ít dòng (chỉ có 1 dòng dữ liệu duy nhất, không thể tạo phân tích/so sánh)
+    if len(non_empty) < 2:
+        return False, (
+            f"Lỗi Dữ Liệu Không Có Ý Nghĩa: Bảng chỉ có {len(non_empty)} dòng dữ liệu, "
+            "không đủ số lượng tối thiểu để phân tích (yêu cầu tối thiểu từ 2 dòng trở lên)."
+        )
+
+    # b. Toàn bộ các ô trong toàn bảng chỉ chứa giá trị rỗng/khoảng trắng
+    invalid_tokens = {"", "nan", "none", "null", "undefined", "n/a", "na"}
+    all_values_list = []
+    for c in non_empty.columns:
+        col_vals = non_empty[c].dropna()
+        for val in col_vals:
+            s_val = str(val).strip().lower()
+            if s_val not in invalid_tokens:
+                all_values_list.append(s_val)
+
+    if len(all_values_list) == 0:
+        return False, "Lỗi Dữ Liệu Không Có Ý Nghĩa: Toàn bộ các ô trong tệp đều là khoảng trắng hoặc không có giá trị."
+
+    # c. Toàn bộ bảng chỉ chứa cùng 1 giá trị lặp lại (không có bất kỳ biến thiên nào)
+    unique_vals = set(all_values_list)
+    if len(unique_vals) <= 1:
+        val_sample = list(unique_vals)[0] if unique_vals else ""
+        return False, (
+            f"Lỗi Dữ Liệu Không Có Ý Nghĩa: Toàn bộ dữ liệu trong bảng đều là cùng một giá trị lặp lại "
+            f"('{val_sample}'), không có sự biến thiên để phân tích kinh doanh."
+        )
+
+    # Đạt toàn bộ kiểm định hợp lệ!
+    return True, None
+
 def load_uploaded_file(uploaded_file, filename: str = "") -> Tuple[Optional[pd.DataFrame], Optional[str]]:
-    """Đọc dữ liệu từ file upload (CSV, XLSX, XLS) với thông báo lỗi chi tiết."""
+    """Đọc dữ liệu từ file upload (CSV, XLSX, XLS) với thông báo lỗi chi tiết theo đúng 6 quy chuẩn."""
     try:
         fname = (filename or getattr(uploaded_file, "filename", "") or getattr(uploaded_file, "name", "") or "")
-        fname = str(fname).lower()
+        fname = str(fname).lower().strip()
 
-        if fname.endswith('.csv'):
-            for enc in ['utf-8-sig', 'utf-8', 'utf-16', 'cp1258', 'latin1']:
-                try:
-                    uploaded_file.seek(0)
-                    df = pd.read_csv(uploaded_file, encoding=enc, sep=None, engine='python', on_bad_lines='skip')
-                    if not df.empty and len(df.columns) >= 1:
-                        break
-                except Exception:
-                    continue
-            else:
-                uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, encoding='latin1', on_bad_lines='skip')
-        elif fname.endswith(('.xlsx', '.xls')):
+        # 1. Kiểm tra File rỗng (0 bytes)
+        if hasattr(uploaded_file, "seek") and hasattr(uploaded_file, "tell"):
+            uploaded_file.seek(0, 2)
+            fsize = uploaded_file.tell()
             uploaded_file.seek(0)
-            df = pd.read_excel(uploaded_file)
-        else:
-            return None, f"Lỗi Định Dạng Tệp ({fname}): Hệ thống chỉ hỗ trợ tệp .csv, .xlsx hoặc .xls. Vui lòng kiểm tra lại định dạng tệp."
+            if fsize == 0:
+                return None, "Lỗi Tệp Rỗng (0 Bytes): Tệp tải lên hoàn toàn không có dữ liệu (kích thước tệp bằng 0 bytes)."
+
+        # 2. Kiểm tra Sai định dạng (phần mở rộng)
+        if not fname.endswith(('.csv', '.xlsx', '.xls')):
+            return None, (
+                f"Lỗi Sai Định Dạng Tệp ({fname}): Hệ thống chỉ chấp nhận tệp bảng tính hợp lệ (.CSV, .XLSX hoặc .XLS). "
+                "Vui lòng kiểm tra lại định dạng tệp trước khi tải lên."
+            )
+
+        df = None
+        if fname.endswith('.csv'):
+            try:
+                for enc in ['utf-8-sig', 'utf-8', 'utf-16', 'cp1258', 'latin1']:
+                    try:
+                        uploaded_file.seek(0)
+                        df = pd.read_csv(uploaded_file, encoding=enc, sep=None, engine='python', on_bad_lines='skip')
+                        if not df.empty and len(df.columns) >= 1:
+                            break
+                    except (pd.errors.EmptyDataError, Exception):
+                        continue
+                else:
+                    uploaded_file.seek(0)
+                    df = pd.read_csv(uploaded_file, encoding='latin1', on_bad_lines='skip')
+            except pd.errors.EmptyDataError:
+                return None, "Lỗi Tệp Rỗng: Tệp CSV không chứa bất kỳ cột hoặc dòng dữ liệu nào."
+            except PermissionError:
+                return None, "Lỗi Chưa Mở Quyền Truy Cập: Tệp đang bị khóa hoặc hệ thống không được cấp quyền đọc tệp này."
+            except Exception as e:
+                err_str = str(e).lower()
+                if any(k in err_str for k in ['permission', 'access denied', 'unauthorized', 'lock']):
+                    return None, "Lỗi Chưa Mở Quyền Truy Cập: Tệp đang bị khóa quyền truy cập. Vui lòng mở quyền đọc và thử lại."
+                return None, f"Lỗi Sai Định Dạng: Không thể đọc cấu trúc tệp CSV do tệp bị hỏng hoặc sai định dạng ({str(e)})."
+        elif fname.endswith(('.xlsx', '.xls')):
+            try:
+                uploaded_file.seek(0)
+                df = pd.read_excel(uploaded_file)
+            except PermissionError:
+                return None, "Lỗi Chưa Mở Quyền Truy Cập: Tệp Excel đang bị khóa quyền truy cập từ hệ thống."
+            except Exception as e:
+                err_str = str(e).lower()
+                if any(k in err_str for k in ['password', 'encrypt', 'protect', 'permission', 'unauthorized', 'lock']):
+                    return None, "Lỗi Chưa Mở Quyền Truy Cập: Tệp Excel bị khóa mật khẩu hoặc chưa mở quyền truy cập. Vui lòng gỡ mật khẩu và thử lại."
+                return None, f"Lỗi Sai Định Dạng: Không thể đọc cấu trúc tệp Excel do tệp bị hỏng hoặc sai định dạng ({str(e)})."
         
-        if df is None or df.empty:
-            return None, "Lỗi Tệp Dữ Liệu Rỗng: Tệp tải lên không chứa hàng dữ liệu nào hoặc tất cả các ô đều trống."
+        ok, err = validate_dataframe_has_data(df)
+        if not ok:
+            return None, err
+            
         return df, None
+    except PermissionError:
+        return None, "Lỗi Chưa Mở Quyền Truy Cập: Tệp đang bị khóa mật khẩu hoặc quyền truy cập bị từ chối."
     except Exception as e:
-        return None, f"Lỗi Đọc Tệp: {str(e)}"
+        err_str = str(e).lower()
+        if any(k in err_str for k in ['password', 'encrypt', 'protect', 'permission', 'unauthorized', 'lock']):
+            return None, "Lỗi Chưa Mở Quyền Truy Cập: Tệp đang bị khóa mật khẩu hoặc chưa mở quyền truy cập."
+        return None, f"Lỗi Sai Định Dạng: Không thể đọc tệp dữ liệu ({str(e)})."
 

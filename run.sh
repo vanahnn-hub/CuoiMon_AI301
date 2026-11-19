@@ -12,4 +12,4 @@ echo "🚀 Đang khởi động StratAI Agent (Đã tích hợp API Key)..."
 echo "📍 Địa chỉ máy chủ: http://localhost:8501"
 echo "=========================================================="
 
-./venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 8501
+./venv/bin/python -m uvicorn server:app --host 0.0.0.0 --port 8501 --reload

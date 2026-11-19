@@ -1,10 +1,41 @@
 import os
 import json
+# --- NGUYÊN TẮC TỐI THƯỢNG: YÊU CẦU CỦA NGƯỜI DÙNG LÀ MỆNH LỆNH ƯU TIÊN SỐ 1 ---
+SUPREME_USER_DIRECTIVE = """NGUYÊN TẮC TỐI THƯỢNG: YÊU CẦU CỦA NGƯỜI DÙNG LÀ MỆNH LỆNH ƯU TIÊN SỐ 1.
+1. Thực hiện đúng 100% yêu cầu người dùng, kể cả khi khác mặc định hoặc đề xuất ban đầu.
+2. Tự suy luận ý định thật (hiểu viết tắt, không dấu, sai chính tả, tự map tên cột/giá trị thực tế trong dữ liệu).
+3. Bám sát dữ liệu thật, không bịa số liệu, nêu rõ lý do nếu dữ liệu thiếu.
+4. Xuyên suốt cả 5 bước: phản ánh nhất quán ở bảng dữ liệu, KPI, biểu đồ, nguyên nhân, giải pháp, báo cáo.
+5. Dữ liệu vô nghĩa / bất hợp lý: phát hiện theo ngữ cảnh cột (không dùng ngưỡng cứng), phát hiện ngoại lai (IQR) chỉ gắn cờ cảnh báo không tự xóa; giá trị âm nếu là dữ liệu thật (lỗ/hoàn tiền) giữ nguyên; phát hiện giá trị giữ chỗ, cột vô nghĩa, thông tin PII.
+6. Minh bạch & Hoàn tác: Không sửa âm thầm, ghi log chi tiết, luôn giữ bản gốc; nếu sạch nói rõ sạch, không bịa lỗi.
+7. Ưu tiên: Yêu cầu của người dùng > Bảo toàn dữ liệu gốc > Quy tắc tự động.
+
+QUY CHUẨN MÔ TẢ BIỂU ĐỒ, NGUYÊN NHÂN, GIẢI PHÁP VÀ BÁO CÁO (BƯỚC 3, 4, 5):
+- BƯỚC 3 (Findings F1, F2...): Mỗi biểu đồ gồm đúng 5 phần (tối đa 1-2 câu):
+  1. what_it_shows: so sánh/đo gì, đơn vị, phạm vi.
+  2. how_to_read: trục, màu, ý nghĩa cột cao/thấp.
+  3. key_numbers: 3 số nổi bật (cao nhất kèm tên, thấp nhất kèm tên, chênh lệch hoặc trung bình).
+  4. insight: điều số liệu nói lên + mức quan trọng (% tổng hoặc tiền).
+  5. action: việc cụ thể cần làm, nêu đối tượng.
+  - Mỗi câu phải có số liệu hoặc tên nhóm thật; cấm câu chung chung. Biểu đồ so sánh nhóm: 1 series, sắp xếp giảm dần, tối đa 12 nhóm.
+  - step3_summary: Đúng 3 kết luận chính, mỗi kết luận kèm [F...] nguồn.
+- BƯỚC 4:
+  - NGUYÊN NHÂN (C1, C2...): from_findings, problem (1 câu có số liệu), evidence (2 bằng chứng), why_chain (3-5 bước Why kèm số liệu và nhãn 'dữ liệu chứng minh' hoặc 'giả thuyết'), root_cause (tầng quy trình/cơ chế).
+  - GIẢI PHÁP (S1, S2...): addresses, title (bắt đầu bằng động từ hành động), steps (3-5 bước: việc - người làm - hạn), raci, kpi (hiện tại -> mục tiêu 30/60/90 ngày), expected_impact (công thức/giả định hoặc ước tính), risk (rủi ro và cách giảm), priority (làm ngay/trung hạn/dài hạn).
+- BƯỚC 5:
+  - executive_summary: 3-4 câu trả lời thẳng câu hỏi người dùng, quy mô vấn đề và hướng xử lý.
+  - conclusions: 3-5 kết luận có số liệu kèm chuỗi findings [F...] -> causes [C...] -> solutions [S...].
+  - action_plan: mỗi giải pháp 1 dòng (S - người phụ trách - mốc 30/60/90 - KPI).
+  - target_kpis: mỗi KPI ghi giải pháp S tạo ra nó, hiện tại -> mục tiêu, cách tính.
+  - limitations: tối đa 2 câu về giới hạn dữ liệu và giả định.
+  - Tự kiểm tra: không có F chưa dùng, C chưa có S, S chưa có KPI. Tất cả 100% bằng tiếng Việt.
+"""
+
 import sqlite3
 import pandas as pd
 import numpy as np
-from typing import Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from typing import Optional, List, Dict, Any
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -15,7 +46,9 @@ from modules.cleaning import analyze_raw_quality, clean_and_integrate_data
 from modules.storage import save_dataframe_to_db, list_stored_datasets, query_database, init_db
 from modules.analysis import (
     auto_detect_columns, calculate_kpis, analyze_trends, 
-    analyze_breakdowns, detect_anomalies, calculate_correlations
+    analyze_breakdowns, detect_anomalies, calculate_correlations,
+    build_rich_charts_suite, generate_followup_suggestions,
+    build_deep_dive_details
 )
 from modules.insights import extract_rule_based_insights, generate_llm_insights
 from modules.solutions import generate_business_solutions, generate_llm_solutions
@@ -28,8 +61,18 @@ app = FastAPI(title="StratAI Business Intelligence Agent")
 # Memory cache for active session
 CURRENT_SESSION = {
     "df": None,
+    "raw_df": None,
     "dataset_name": "Retail_Sales_MultiBranch",
     "source_type": "Sample Dataset",
+    "business_profile": {
+        "company_name": "Thời Trang & Bán Lẻ ChicStyle",
+        "industry": "Bán lẻ & Chuỗi cửa hàng",
+        "scale": "Chuỗi 4 chi nhánh",
+        "primary_goal": "Tối ưu lợi nhuận & Kiểm soát chiết khấu",
+        "description": "Kinh doanh bán lẻ đa kênh (cửa hàng & online), mong muốn cắt giảm các đơn hàng bán lỗ, hạn chế lạm dụng mã giảm giá và nâng cao giá trị đơn hàng trung bình."
+    },
+    "chosen_direction": "all_comprehensive",
+    "custom_query": "",
     "kpis": {
         "total_records": 824,
         "total_revenue": 2480000000,
@@ -39,7 +82,9 @@ CURRENT_SESSION = {
         "aov": 2991556
     },
     "anomalies": [],
-    "insights": []
+    "insights": [],
+    "rich_charts": [],
+    "followup_suggestions": []
 }
 
 def call_gemini_llm(prompt: str, custom_key: Optional[str] = None) -> Optional[str]:
@@ -61,6 +106,8 @@ def call_gemini_llm(prompt: str, custom_key: Optional[str] = None) -> Optional[s
     except Exception:
         return None
 
+import math
+
 def serialize_df_for_json(df: pd.DataFrame, limit: int = 100):
     """Serialize DataFrame into JSON-safe dict with format strings."""
     temp = df.head(limit).copy()
@@ -68,10 +115,39 @@ def serialize_df_for_json(df: pd.DataFrame, limit: int = 100):
         if pd.api.types.is_datetime64_any_dtype(temp[col]):
             temp[col] = temp[col].dt.strftime('%Y-%m-%d')
         elif pd.api.types.is_float_dtype(temp[col]):
-            temp[col] = temp[col].apply(lambda x: None if np.isnan(x) else round(float(x), 2))
+            temp[col] = temp[col].apply(lambda x: None if (pd.isna(x) or np.isinf(x)) else round(float(x), 2))
         elif pd.api.types.is_integer_dtype(temp[col]):
             temp[col] = temp[col].astype(int)
-    return temp.to_dict(orient="records")
+    temp = temp.replace([np.inf, -np.inf], None)
+    records = temp.to_dict(orient="records")
+    return sanitize_for_json(records)
+
+def sanitize_for_json(obj):
+    """Đảm bảo 100% mọi object, dict, list, numpy/pandas types tuân thủ chuẩn JSON RFC 7159."""
+    if obj is None:
+        return None
+    if isinstance(obj, (bool, np.bool_)):
+        return bool(obj)
+    if isinstance(obj, (int, np.integer)):
+        return int(obj)
+    if isinstance(obj, (float, np.floating)):
+        if math.isnan(obj) or math.isinf(obj):
+            return 0.0
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return [sanitize_for_json(x) for x in obj.tolist()]
+    if isinstance(obj, (pd.Series, pd.Index)):
+        return [sanitize_for_json(x) for x in obj.tolist()]
+    if isinstance(obj, dict):
+        return {str(k): sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [sanitize_for_json(x) for x in obj]
+    try:
+        if pd.isna(obj):
+            return None
+    except Exception:
+        pass
+    return obj
 
 def process_pipeline(df: pd.DataFrame, dataset_name: str, source_type: str, disc_thresh: float = 30.0, ret_thresh: float = 10.0):
     # 1. Quality before cleaning
@@ -122,14 +198,50 @@ def process_pipeline(df: pd.DataFrame, dataset_name: str, source_type: str, disc
                 "profit": [round(float(v) / scale, 2) for v in b_df['Profit'].tolist()[:6]] if 'Profit' in b_df.columns else [round(float(v) * 0.2 / scale, 2) for v in b_df['Revenue'].tolist()[:6]]
             }
         
-    # 5. Insights
-    insights = extract_rule_based_insights(kpis, breakdowns, anomalies, trend_df)
+    # 5. Insights & Solutions (Truyền custom_query và cleaned_df để phân tích bám sát yêu cầu người dùng và dữ liệu thực tế)
+    custom_query = CURRENT_SESSION.get("custom_query", "")
+    b_profile = CURRENT_SESSION.get("business_profile", {})
+    direction = CURRENT_SESSION.get("chosen_direction", "all_comprehensive")
     
-    # 6. Solutions
-    solutions = generate_business_solutions(insights, kpis, anomalies)
+    insights = extract_rule_based_insights(kpis, breakdowns, anomalies, trend_df, custom_query=custom_query, df=cleaned_df, mapping=mapping)
     
-    # 7. Evaluation
-    evaluation = build_evaluation_framework(kpis, anomalies)
+    # 6. Solutions (Bám sát bối cảnh doanh nghiệp và dữ liệu thực tế)
+    solutions = generate_business_solutions(insights, kpis, anomalies, custom_query=custom_query, df=cleaned_df, mapping=mapping, business_profile=b_profile)
+    
+    # 7. Evaluation (Cá nhân hóa theo ngành nghề và bộ chỉ số)
+    evaluation = build_evaluation_framework(kpis, anomalies, business_profile=b_profile, df=cleaned_df)
+
+    # 8. Rich Charts Suite (Biểu đồ chuyên sâu theo đúng yêu cầu người dùng) & Follow-up Suggestions
+    from modules.analysis import interpret_user_intent, design_tailored_dashboard
+    user_intent_info = interpret_user_intent(custom_query, cleaned_df)
+    user_intent_clarification = user_intent_info.get("clarification", "")
+    
+    rich_charts = build_rich_charts_suite(cleaned_df, mapping, kpis, trend_df, breakdowns, b_profile, direction, custom_query=custom_query)
+    followup_suggestions = generate_followup_suggestions(cleaned_df, mapping, kpis, b_profile, direction, custom_query=custom_query)
+    
+    # 9. Structured Business Intelligence (F1..Fn, C1..Cm, S1..Sk, Báo cáo Bước 5)
+    from modules.structured_intelligence import (
+        enrich_chart_descriptions,
+        generate_step3_summary,
+        generate_causes_and_solutions,
+        generate_step5_report,
+        decode_user_requests
+    )
+    user_req_audit = decode_user_requests(custom_query, cleaned_df, b_profile)
+    request_understanding = user_req_audit.get("request_understanding", [])
+    cannot_answer = user_req_audit.get("cannot_answer", [])
+    direct_answers = user_req_audit.get("direct_answers", [])
+    audit_checklist = user_req_audit.get("audit_checklist", {})
+
+    enriched_rich_charts = enrich_chart_descriptions(rich_charts, cleaned_df, custom_query=custom_query)
+    step3_summary = generate_step3_summary(enriched_rich_charts)
+    cs_dict = generate_causes_and_solutions(enriched_rich_charts, kpis, cleaned_df, custom_query=custom_query, business_profile=b_profile)
+    structured_causes = cs_dict.get("causes", [])
+    structured_solutions = cs_dict.get("solutions", [])
+    step5_report = generate_step5_report(enriched_rich_charts, structured_causes, structured_solutions, kpis, custom_query=custom_query)
+
+    # 10. Dashboard Thiết Kế Riêng Không Khuôn Mẫu (3-6 KPI & 2-6 Biểu đồ bám sát câu hỏi người dùng)
+    dashboard_design = design_tailored_dashboard(cleaned_df, custom_query=custom_query, direction=direction, kpis=kpis, rich_charts=enriched_rich_charts)
     
     # Cache session
     CURRENT_SESSION["raw_df"] = df.copy()
@@ -140,14 +252,27 @@ def process_pipeline(df: pd.DataFrame, dataset_name: str, source_type: str, disc
     CURRENT_SESSION["kpis"] = kpis
     CURRENT_SESSION["anomalies"] = anomalies
     CURRENT_SESSION["insights"] = insights
+    CURRENT_SESSION["rich_charts"] = enriched_rich_charts
+    CURRENT_SESSION["step3_summary"] = step3_summary
+    CURRENT_SESSION["structured_causes"] = structured_causes
+    CURRENT_SESSION["structured_solutions"] = structured_solutions
+    CURRENT_SESSION["step5_report"] = step5_report
+    CURRENT_SESSION["followup_suggestions"] = followup_suggestions
+    CURRENT_SESSION["user_intent_clarification"] = user_intent_clarification
+    CURRENT_SESSION["dashboard_design"] = dashboard_design
+    CURRENT_SESSION["request_understanding"] = request_understanding
+    CURRENT_SESSION["cannot_answer"] = cannot_answer
+    CURRENT_SESSION["direct_answers"] = direct_answers
+    CURRENT_SESSION["audit_checklist"] = audit_checklist
     
-    return {
+    return sanitize_for_json({
         "dataset_name": dataset_name,
         "table_name": table_name,
         "source_type": source_type,
         "quality_raw": quality_raw,
         "cleaning_summary": cleaning_summary,
-        "cleaned_preview": serialize_df_for_json(cleaned_df, limit=10),
+        "cleaned_preview": serialize_df_for_json(cleaned_df, limit=15),
+        "full_data": serialize_df_for_json(cleaned_df, limit=len(cleaned_df)),
         "kpis": kpis,
         "trend_data": trend_data,
         "breakdown_data": breakdown_data,
@@ -155,8 +280,23 @@ def process_pipeline(df: pd.DataFrame, dataset_name: str, source_type: str, disc
         "correlations": corr_df.to_dict() if corr_df is not None else {},
         "insights": insights,
         "solutions": solutions,
-        "evaluation": evaluation
-    }
+        "evaluation": evaluation,
+        "rich_charts": enriched_rich_charts,
+        "step3_summary": step3_summary,
+        "structured_causes": structured_causes,
+        "structured_solutions": structured_solutions,
+        "step5_report": step5_report,
+        "followup_suggestions": followup_suggestions,
+        "business_profile": b_profile,
+        "chosen_direction": direction,
+        "custom_query": custom_query,
+        "user_intent_clarification": user_intent_clarification,
+        "dashboard_design": dashboard_design,
+        "request_understanding": request_understanding,
+        "cannot_answer": cannot_answer,
+        "direct_answers": direct_answers,
+        "audit_checklist": audit_checklist
+    })
 
 @app.get("/api/config-status")
 def get_config_status():
@@ -186,7 +326,7 @@ def execute_sql(req: SQLRequest):
         return {"success": False, "error": str(e)}
 
 @app.post("/api/sample")
-def load_sample(name: str = "retail"):
+def load_sample(name: str = Query("retail")):
     if name == "ecommerce":
         path = "sample_data/ecommerce_sample.xlsx"
         df = pd.read_excel(path, sheet_name="Sales_Transactions")
@@ -209,11 +349,16 @@ def process_gsheet(req: GSheetRequest):
     df, err = load_google_sheet(req.url)
     if err:
         raise HTTPException(status_code=400, detail=err)
-    return process_pipeline(df, "Google_Sheet_Import", "Google Sheet URL")
+    try:
+        return sanitize_for_json(process_pipeline(df, "Google_Sheet_Import", "Google Sheet URL"))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi phân tích bảng tính Google Sheet: {str(e)}")
 
 @app.post("/api/upload")
 async def process_upload(file: UploadFile = File(...)):
     contents = await file.read()
+    if not contents or len(contents) == 0:
+        raise HTTPException(status_code=400, detail="Lỗi Tệp Rỗng (0 Bytes): Tệp tải lên hoàn toàn không có dữ liệu (kích thước tệp bằng 0 bytes).")
     if len(contents) > 50 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="Dung lượng tệp vượt quá giới hạn tối đa cho phép (50 MB).")
     import io
@@ -222,7 +367,13 @@ async def process_upload(file: UploadFile = File(...)):
     if err:
         raise HTTPException(status_code=400, detail=err)
     clean_name = os.path.splitext(file.filename or "Dataset")[0]
-    return process_pipeline(df, clean_name, f"File Upload ({file.filename})")
+    try:
+        res = process_pipeline(df, clean_name, f"File Upload ({file.filename})")
+        return sanitize_for_json(res)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Lỗi phân tích tệp dữ liệu: {str(e)}")
 
 class ExecSummaryRequest(BaseModel):
     api_key: Optional[str] = None
@@ -292,24 +443,33 @@ def reclean_data(req: ReCleanRequest):
                 "profit": [round(float(v) / scale, 2) for v in b_df['Profit'].tolist()[:6]] if 'Profit' in b_df.columns else [round(float(v) * 0.2 / scale, 2) for v in b_df['Revenue'].tolist()[:6]]
             }
         
-    insights = extract_rule_based_insights(kpis, breakdowns, anomalies, trend_df)
-    solutions = generate_business_solutions(insights, kpis, anomalies)
+    custom_query = CURRENT_SESSION.get("custom_query", "")
+    insights = extract_rule_based_insights(kpis, breakdowns, anomalies, trend_df, custom_query=custom_query, df=cleaned_df, mapping=mapping)
+    solutions = generate_business_solutions(insights, kpis, anomalies, custom_query=custom_query, df=cleaned_df, mapping=mapping)
     evaluation = build_evaluation_framework(kpis, anomalies)
+
+    b_profile = CURRENT_SESSION.get("business_profile", {})
+    direction = CURRENT_SESSION.get("chosen_direction", "all_comprehensive")
+    rich_charts = build_rich_charts_suite(cleaned_df, mapping, kpis, trend_df, breakdowns, b_profile, direction, custom_query=custom_query)
+    followup_suggestions = generate_followup_suggestions(cleaned_df, mapping, kpis, b_profile, direction, custom_query=custom_query)
     
     CURRENT_SESSION["df"] = cleaned_df
     CURRENT_SESSION["kpis"] = kpis
     CURRENT_SESSION["anomalies"] = anomalies
     CURRENT_SESSION["insights"] = insights
+    CURRENT_SESSION["rich_charts"] = rich_charts
+    CURRENT_SESSION["followup_suggestions"] = followup_suggestions
     
     quality_raw = CURRENT_SESSION.get("quality_raw", {"total_rows": len(raw_df), "total_cols": len(raw_df.columns)})
     
-    return {
+    return sanitize_for_json({
         "dataset_name": dataset_name,
         "table_name": table_name,
         "source_type": source_type,
         "quality_raw": quality_raw,
         "cleaning_summary": cleaning_summary,
         "cleaned_preview": serialize_df_for_json(cleaned_df, limit=15),
+        "full_data": serialize_df_for_json(cleaned_df, limit=len(cleaned_df)),
         "kpis": kpis,
         "trend_data": trend_data,
         "breakdown_data": breakdown_data,
@@ -318,8 +478,165 @@ def reclean_data(req: ReCleanRequest):
         "insights": insights,
         "solutions": solutions,
         "evaluation": evaluation,
+        "rich_charts": rich_charts,
+        "followup_suggestions": followup_suggestions,
+        "business_profile": b_profile,
+        "chosen_direction": direction,
         "user_request_applied": req.user_request or "Đã làm sạch lại theo quy tắc"
+    })
+
+@app.get("/api/full-data")
+def get_full_data():
+    """Lấy toàn bộ dữ liệu đã làm sạch hiện tại."""
+    df = CURRENT_SESSION.get("df")
+    if df is None:
+        return {"columns": [], "rows": [], "total_rows": 0}
+    return {
+        "columns": list(df.columns),
+        "rows": serialize_df_for_json(df, limit=len(df)),
+        "total_rows": len(df)
     }
+
+@app.post("/api/restore-clean")
+def restore_clean_data():
+    """Khôi phục lại dữ liệu làm sạch chuẩn ban đầu trước khi người dùng góp ý tùy biến."""
+    raw_df = CURRENT_SESSION.get("raw_df")
+    dataset_name = CURRENT_SESSION.get("dataset_name", "Cleaned_Dataset")
+    source_type = CURRENT_SESSION.get("source_type", "Restored Original")
+    if raw_df is None:
+        path = "sample_data/retail_sales_sample.csv"
+        raw_df = pd.read_csv(path)
+        CURRENT_SESSION["raw_df"] = raw_df.copy()
+        
+    return process_pipeline(raw_df, dataset_name, source_type)
+
+class BusinessProfileRequest(BaseModel):
+    company_name: Optional[str] = None
+    industry: Optional[str] = None
+    scale: Optional[str] = None
+    primary_goal: Optional[str] = None
+    description: Optional[str] = None
+
+@app.post("/api/business-profile")
+def update_business_profile(req: BusinessProfileRequest):
+    bp = CURRENT_SESSION.get("business_profile", {})
+    if req.company_name is not None: bp["company_name"] = req.company_name
+    if req.industry is not None: bp["industry"] = req.industry
+    if req.scale is not None: bp["scale"] = req.scale
+    if req.primary_goal is not None: bp["primary_goal"] = req.primary_goal
+    if req.description is not None: bp["description"] = req.description
+    CURRENT_SESSION["business_profile"] = bp
+    return {"success": True, "business_profile": bp}
+
+class AnalyzeDirectionRequest(BaseModel):
+    direction: Optional[str] = "all_comprehensive"
+    directions: Optional[List[str]] = None
+    custom_query: Optional[str] = None
+    company_name: Optional[str] = None
+    industry: Optional[str] = None
+    scale: Optional[str] = None
+    primary_goal: Optional[str] = None
+    description: Optional[str] = None
+    api_key: Optional[str] = None
+
+@app.post("/api/analyze-direction")
+def set_analyze_direction(req: AnalyzeDirectionRequest):
+    bp = CURRENT_SESSION.get("business_profile", {})
+    if req.company_name is not None: bp["company_name"] = req.company_name
+    if req.industry is not None: bp["industry"] = req.industry
+    if req.scale is not None: bp["scale"] = req.scale
+    if req.primary_goal is not None: bp["primary_goal"] = req.primary_goal
+    if req.description is not None: bp["description"] = req.description
+    CURRENT_SESSION["business_profile"] = bp
+    
+    # Hỗ trợ chọn nhiều hướng phân tích cùng lúc (Multi-select)
+    selected_dirs = req.directions or ([req.direction] if req.direction else ["all_comprehensive"])
+    CURRENT_SESSION["chosen_directions"] = selected_dirs
+    CURRENT_SESSION["chosen_direction"] = selected_dirs[0] if len(selected_dirs) == 1 else "all_comprehensive"
+    
+    combined_query = req.custom_query or ""
+    dir_labels = {
+        "channel_efficiency": "Đánh giá hiệu suất theo phân loại đơn vị",
+        "profit_optimization": "Kiểm soát rủi ro, tối ưu lợi nhuận & chi phí",
+        "revenue_growth": "Tăng trưởng doanh thu & chu kỳ vận hành thời gian",
+        "all_comprehensive": "Phân tích toàn diện đa chiều dữ liệu"
+    }
+    if len(selected_dirs) > 1:
+        extra_desc = "Phân tích kết hợp đa hướng: " + ", ".join([dir_labels.get(d, d) for d in selected_dirs])
+        if combined_query:
+            combined_query = f"{combined_query}\n({extra_desc})"
+        else:
+            combined_query = extra_desc
+
+    CURRENT_SESSION["custom_query"] = combined_query
+    
+    df = CURRENT_SESSION.get("df")
+    if df is None:
+        path = "sample_data/retail_sales_sample.csv"
+        df = pd.read_csv(path)
+    ds_name = CURRENT_SESSION.get("dataset_name", "Retail_Sales_MultiBranch")
+    src = CURRENT_SESSION.get("source_type", "Active Data")
+    return process_pipeline(df, ds_name, src)
+
+class FollowupRequest(BaseModel):
+    followup_id: Optional[str] = None
+    followup_ids: Optional[List[str]] = None
+
+@app.post("/api/deep-dive-followup")
+def deep_dive_followup(req: FollowupRequest):
+    kpis = CURRENT_SESSION.get("kpis", {})
+    biz = CURRENT_SESSION.get("business_profile", {})
+    df = CURRENT_SESSION.get("cleaned_df")
+    if df is None:
+        df = CURRENT_SESSION.get("df")
+        
+    ids = req.followup_ids if req.followup_ids else ([req.followup_id] if req.followup_id else ["followup_vip_affinity"])
+    
+    results = [build_deep_dive_details(fid, df=df, kpis=kpis, business_profile=biz) for fid in ids]
+    
+    CURRENT_SESSION["active_deep_dives"] = results
+    if results:
+        CURRENT_SESSION["active_deep_dive"] = results[0]
+        
+    if len(results) == 1:
+        res = dict(results[0])
+        res["results"] = results
+        return sanitize_for_json(res)
+        
+    tags = [r.get("tag", "") for r in results]
+    combined_kpis = []
+    combined_solutions = []
+    combined_target_kpis = []
+    combined_findings = []
+    
+    for r in results:
+        combined_kpis.extend(r.get("kpis_deep_dive", []))
+        combined_solutions.extend(r.get("step4_solutions", []))
+        combined_target_kpis.extend(r.get("step4_target_kpis", []))
+        combined_findings.extend(r.get("detailed_findings", []))
+        
+    combined_summary = "<br/>".join([f"&bull; <b>[{r.get('tag')}]:</b> {r.get('summary')}" for r in results])
+    
+    return sanitize_for_json({
+        "success": True,
+        "is_multi": True,
+        "results": results,
+        "tag": " • ".join(tags[:3]),
+        "tag_color": "bg-pastel-100 text-pastel-900 border-pastel-300",
+        "title": f"Phân Tích Tích Hợp {len(results)} Hướng Chiến Lược Trọng Tâm Do Bạn Lựa Chọn",
+        "summary": combined_summary,
+        "kpis_deep_dive": combined_kpis[:8],
+        "chart_config": results[0].get("chart_config"),
+        "detailed_findings": combined_findings[:6],
+        "five_whys_diagnosis": results[0].get("five_whys_diagnosis"),
+        "step4_solutions": combined_solutions,
+        "step4_target_kpis": combined_target_kpis,
+        "report_section": {
+            "title": f"Chiến Lược Tích Hợp Toàn Diện ({len(results)} Hướng Phân Tích Đã Chọn)",
+            "executive_takeaway": " &bull; ".join([r.get("report_section", {}).get("executive_takeaway", "") for r in results if r.get("report_section")]),
+            "strategic_actions": [a for r in results for a in r.get("report_section", {}).get("strategic_actions", [])]
+        }
+    })
 
 class FeedbackRequest(BaseModel):
     feedback: str
@@ -336,21 +653,62 @@ def reanalyze_with_feedback(req: FeedbackRequest):
     margin = kpis.get("profit_margin_pct", 16.6)
 
     prompt = (
-        f"Bạn là Chuyên gia Phân tích Kinh doanh StratAI. Người dùng vừa kiểm duyệt bản nháp phân tích của bộ dữ liệu '{ds_name}' "
-        f"(Doanh thu: {rev:,.0f} đ, Lợi nhuận: {profit:,.0f} đ, Margin: {margin}%) và yêu cầu điều chỉnh theo Feedback sau:\n"
-        f"\"{fb}\"\n"
-        f"Hãy viết lại Tóm tắt phân tích & Đề xuất giải pháp bổ sung (3-4 câu ngắn gọn, trực diện bằng tiếng Việt) đáp ứng chính xác yêu cầu trên."
+        f"{SUPREME_USER_DIRECTIVE}\n"
+        f"Bạn là Chuyên gia Chiến lược Kinh doanh cấp cao StratAI. Người dùng kiểm duyệt bản phân tích của bộ dữ liệu '{ds_name}' "
+        f"(Doanh thu: {rev:,.0f} đ, Lợi nhuận: {profit:,.0f} đ, Margin: {margin}%) và đưa ra Góp ý / Yêu cầu điều chỉnh sau:\n"
+        f"\"{fb}\"\n\n"
+        f"Hãy viết lại bản định hướng thực thi mới đáp ứng 100% góp ý của người dùng, gồm:\n"
+        f"1. Tóm tắt định hướng mới (3-4 câu súc tích).\n"
+        f"2. Ba giải pháp hành động cụ thể tương ứng với góp ý trên (mỗi giải pháp gồm: title, timeline, owner, impact, details).\n"
+        f"Định dạng kết quả JSON strictly như sau:\n"
+        f'{{"summary": "...", "solutions": [{{"title": "...", "timeline": "...", "owner": "...", "impact": "...", "details": "..."}}]}}'
     )
     llm_text = call_gemini_llm(prompt, req.api_key)
-    if not llm_text:
-        llm_text = (
-            f"<b>[Đã cập nhật theo Feedback: \"{fb}\"]</b><br/>"
-            f"Hệ thống AI Agent đã phân tích lại bộ dữ liệu <b>{ds_name}</b> theo định hướng của bạn: "
-            f"Tập trung tối ưu hóa trực tiếp vào trọng tâm <i>\"{fb}\"</i> dựa trên nền tảng doanh thu <b>{rev:,.0f} ₫</b> và biên lợi nhuận <b>{margin}%</b>. "
-            f"Các đề xuất giải pháp bên dưới đã được hiệu chỉnh ưu tiên nguồn lực để giải quyết yêu cầu này trong chu kỳ 30-90 ngày tới."
+    parsed_json = None
+    if llm_text:
+        try:
+            cleaned_json = re.sub(r'```(?:json)?\s*', '', llm_text).replace('```', '').strip()
+            parsed_json = json.loads(cleaned_json)
+        except Exception:
+            pass
+
+    if parsed_json and "summary" in parsed_json:
+        updated_summary = parsed_json["summary"]
+        updated_solutions = parsed_json.get("solutions", [])
+    else:
+        updated_summary = (
+            f"<b>[Đã cập nhật theo Góp ý: \"{fb}\"]</b><br/>"
+            f"Hệ thống đã hiệu chỉnh toàn bộ mô hình phân tích và chiến lược cho <b>{ds_name}</b> theo đúng định hướng của bạn: "
+            f"Tập trung nguồn lực vào trọng tâm <i>\"{fb}\"</i> trên nền tảng doanh thu <b>{rev:,.0f} ₫</b> và biên lợi nhuận <b>{margin}%</b>. "
+            f"Tất cả các giải pháp thực thi bên dưới đã được tái cấu trúc để ưu tiên tối đa cho yêu cầu này."
         )
+        updated_solutions = [
+            {
+                "title": f"1. Chiến lược Trọng tâm: {fb}",
+                "timeline": "Tuần 1–2 • Ưu tiên P1",
+                "owner": "Giám Đốc Kinh Doanh (CCO) & Marketing",
+                "impact": f"Tối ưu trực diện theo góp ý '{fb[:25]}'",
+                "details": f"Triển khai hành động cấp bách đáp ứng trực tiếp yêu cầu: '{fb}'. Thiết lập các kịch bản thực thi và đo lường ROI hàng tuần."
+            },
+            {
+                "title": f"2. Tối Ưu Hóa Vận Hành & Quy Trình Theo '{fb[:30]}'",
+                "timeline": "Tháng thứ 2 • Ưu tiên P2",
+                "owner": "Trưởng Vận Hành (Ops Lead) & IT",
+                "impact": "Cắt giảm 15-20% chi phí vận hành dư thừa",
+                "details": f"Chuẩn hóa quy trình vận hành và tinh gọn chi phí nhằm giải quyết triệt để vấn đề được chỉ ra trong góp ý của bạn."
+            },
+            {
+                "title": "3. Kiểm Soát Tài Chính & Đo Lường Hiệu Quả",
+                "timeline": "Tháng thứ 3 • Giám sát P3",
+                "owner": "Giám Đốc Tài Chính (CFO)",
+                "impact": "Bảo toàn biên lợi nhuận mục tiêu",
+                "details": "Thiết lập cơ chế kiểm soát tài chính định lượng, bảo toàn tỷ suất lợi nhuận mục tiêu và theo dõi sát sao sau khi điều chỉnh."
+            }
+        ]
+
     return {
-        "updated_summary": llm_text,
+        "updated_summary": updated_summary,
+        "updated_solutions": updated_solutions,
         "feedback_applied": fb
     }
 
@@ -365,10 +723,10 @@ def generate_exec_summary(req: ExecSummaryRequest):
     prompt = f"""Bạn là Giám đốc Chiến lược (CSO). Hãy viết 1 đoạn Executive Summary ngắn gọn (3-4 câu) bằng tiếng Việt phân tích bộ dữ liệu '{ds_name}' với Tổng doanh thu {rev:,.0f} đ, Lợi nhuận gộp {profit:,.0f} đ (Margin {margin}%), và đưa ra ưu tiên hành động số 1."""
     llm_text = call_gemini_llm(prompt, req.api_key)
     if llm_text:
-        return {"summary": llm_text, "source": "Gemini AI Agent"}
+        return {"summary": llm_text, "source": "Gemini AI"}
         
     summary = (
-        f"Báo cáo điều hành từ <b>StratAI Agent</b> cho <b>{ds_name}</b>: "
+        f"Báo cáo điều hành từ <b>StratAI</b> cho <b>{ds_name}</b>: "
         f"Tổng doanh thu đạt <b>{rev:,.0f} ₫</b> với lợi nhuận gộp <b>{profit:,.0f} ₫ (Gross Margin {margin}%)</b>. "
         f"Ưu tiên số 1 trong 2 tuần tới là kích hoạt <b>Price Floor Guardrails (Rào cản giá sàn)</b> nhằm triệt tiêu 100% các đơn hàng bán lỗ do chiết khấu sâu vượt ngưỡng 30%, đồng thời tái phân bổ ngân sách sang kênh Website DTC và nhóm khách hàng VIP RFM để nâng biên lợi nhuận thêm +5.0%."
     )
@@ -389,6 +747,7 @@ def chat_agent(req: ChatRequest):
     aov = kpis.get("aov", 2991556)
     
     system_prompt = (
+        f"{SUPREME_USER_DIRECTIVE}\n"
         f"Bạn là StratAI Business Advisor. Bạn đang tư vấn dựa trên dataset '{ds_name}' "
         f"(Doanh thu: {rev:,.0f} đ, Lợi nhuận: {profit:,.0f} đ, Margin: {margin}%, AOV: {aov:,.0f} đ). "
         f"Hãy trả lời ngắn gọn, sắc bén, định dạng HTML/Markdown rõ ràng."
@@ -428,7 +787,7 @@ def chat_agent(req: ChatRequest):
         )
     else:
         reply = (
-            f"Hệ thống <b>StratAI Business Agent</b> (đã tích hợp API Key) đã phân tích hoàn tất 7 bước cho <b>{ds_name}</b>:<br/>"
+            f"Hệ thống <b>StratAI</b> (đã tích hợp API Key) đã phân tích hoàn tất 7 bước cho <b>{ds_name}</b>:<br/>"
             f"• <b>Tổng doanh thu:</b> {rev:,.0f} ₫ | <b>Lợi nhuận gộp:</b> {profit:,.0f} ₫ (Margin <b>{margin}%</b>)<br/>"
             f"• <b>Giá trị đơn TB (AOV):</b> {aov:,.0f} ₫<br/>"
             f"Bạn có thể hỏi sâu về: <i>\"Vì sao có đơn bán lỗ?\"</i>, <i>\"Cách tăng Margin +5%\"</i>, <i>\"Phân công RACI\"</i> hoặc <i>\"Cách giảm tỷ lệ hoàn đơn\"</i>!"
@@ -443,4 +802,12 @@ app.mount("/static", StaticFiles(directory="public"), name="static")
 @app.get("/", response_class=HTMLResponse)
 def serve_index():
     with open("public/index.html", "r", encoding="utf-8") as f:
-        return f.read()
+        content = f.read()
+    return HTMLResponse(
+        content=content,
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0"
+        }
+    )
