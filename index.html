@@ -2837,11 +2837,19 @@
                     const growthSign = +growthPct >= 0 ? '+' : '';
 
                     charts.push({
+                        id: "f1",
                         finding_id: "F1",
                         chart_type: "line",
                         title: `1. Xu hướng biến động ${mLabel} theo ${tLabel}`,
                         subtitle: `Theo dõi chu kỳ biến động ${mLabel} qua từng mốc ${tLabel}`,
                         labels: labels,
+                        datasets: [{
+                            label: mLabel,
+                            data: seriesData,
+                            fill: true,
+                            borderColor: '#2C5E82',
+                            backgroundColor: 'rgba(187, 228, 246, 0.4)'
+                        }],
                         series: [{ name: mLabel, data: seriesData }],
                         key_numbers: [
                             `Mốc cao nhất: '${labels[maxIdx]}' (${formatVal(seriesData[maxIdx])})`,
@@ -2876,11 +2884,18 @@
                     const ratio = laggard[1] > 0 ? (leader[1] / laggard[1]).toFixed(1) : '1.0';
 
                     charts.push({
+                        id: "f2",
                         finding_id: "F2",
                         chart_type: "bar",
                         title: `2. Xếp hạng so sánh ${mLabel} theo ${dLabel}`,
                         subtitle: `Đối chiếu quy mô đóng góp giữa các ${dLabel} hàng đầu`,
                         labels: labels,
+                        datasets: [{
+                            label: mLabel,
+                            data: seriesData,
+                            backgroundColor: '#2C5E82',
+                            borderColor: '#0F2942'
+                        }],
                         series: [{ name: mLabel, data: seriesData }],
                         key_numbers: [
                             `Dẫn đầu: '${leader[0]}' (${formatVal(leader[1])})`,
@@ -2916,11 +2931,17 @@
                     const top2Pct = top5.length > 1 ? (((top5[0][1] + top5[1][1]) / totalVal2) * 100).toFixed(1) : top1Pct;
 
                     charts.push({
+                        id: "f3",
                         finding_id: "F3",
                         chart_type: "doughnut",
                         title: `3. Cơ cấu tỷ trọng ${mLabel} theo ${dLabel2}`,
                         subtitle: `Tỷ lệ đóng góp thực tế trên từng phân nhóm ${dLabel2}`,
                         labels: labels2,
+                        datasets: [{
+                            label: mLabel,
+                            data: seriesData2,
+                            backgroundColor: ['#2C5E82', '#6BA3C7', '#92C3E1', '#BBE4F6', '#E0F1FC']
+                        }],
                         series: [{ name: mLabel, data: seriesData2 }],
                         key_numbers: [
                             `Tỷ trọng lớn nhất: '${top5[0][0]}' (${top1Pct}%)`,
@@ -2936,12 +2957,18 @@
             // Fallback nếu thiếu biểu đồ
             if (charts.length === 0) {
                 charts.push({
+                    id: "f1",
                     finding_id: "F1",
                     chart_type: "bar",
                     title: `1. Phân bố tổng quan ${mLabel}`,
                     subtitle: `Quy mô ghi nhận từ tệp dữ liệu đã tải`,
                     labels: origCols.slice(0, 5).map(c => cleanLabel(c)),
-                    series: [{ name: "Số lượng", data: [rows.length, rows.length, rows.length, rows.length, rows.length] }],
+                    datasets: [{
+                        label: "Số lượng bản ghi",
+                        data: [rows.length, rows.length, rows.length, rows.length, rows.length],
+                        backgroundColor: '#2C5E82'
+                    }],
+                    series: [{ name: "Số lượng bản ghi", data: [rows.length, rows.length, rows.length, rows.length, rows.length] }],
                     key_numbers: [
                         `Tổng số bản ghi: ${rows.length}`,
                         `Số cột thực tế: ${origCols.length}`,
@@ -6329,6 +6356,20 @@ async function submitStep2DirectCleaning() {
                 if (window.richChartInstances[id]) {
                     try { window.richChartInstances[id].destroy(); } catch (_) {}
                     delete window.richChartInstances[id];
+                }
+            });
+
+            // Tự động chuẩn hóa id và datasets cho từng chart
+            (richCharts || []).forEach((c, idx) => {
+                if (!c.id) c.id = (c.finding_id || `f${idx + 1}`).toLowerCase();
+                if ((!c.datasets || c.datasets.length === 0) && c.series && c.series.length > 0) {
+                    c.datasets = c.series.map(s => ({
+                        label: s.name || c.title || 'Dữ liệu',
+                        data: s.data || [],
+                        backgroundColor: '#2C5E82',
+                        borderColor: '#0F2942',
+                        fill: c.chart_type === 'line'
+                    }));
                 }
             });
 
