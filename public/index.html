@@ -2526,10 +2526,174 @@
                 if (res.ok) {
                     const smart = await res.json();
                     renderStep1SmartSuggestions(smart, false);
+                    return;
                 }
             } catch (e) {
-                console.warn('Lỗi kiểm tra câu hỏi theo dữ liệu:', e);
+                console.warn('Backend API /api/suggest-problems-and-chips không khả dụng, chuyển sang bộ sinh gợi ý client-side:', e);
             }
+
+            // Fallback phía client (cho Vercel static hoặc khi không có server backend)
+            const ds = (backend && backend.cleaned_preview && backend.cleaned_preview.length > 0) 
+                ? backend.cleaned_preview 
+                : (SAMPLE_DATASETS[activeDatasetKey] ? SAMPLE_DATASETS[activeDatasetKey].previewRows : null);
+            if (ds && ds.length > 0) {
+                const smart = generateClientSideSmartSuggestions(ds, activeDatasetKey, questions, nameEl ? nameEl.value : '');
+                if (smart) renderStep1SmartSuggestions(smart, false);
+            }
+        }
+
+        // BỘ SINH GỢI Ý THÔNG MINH CLIENT-SIDE (CHUẨN 4 BƯỚC CHO VERCEL & OFFLINE)
+        function generateClientSideSmartSuggestions(rows, fileName, userQuestions, companyName) {
+            if (!rows || rows.length === 0) return null;
+            const origCols = Object.keys(rows[0]);
+            const rowCount = rows.length;
+
+            const stripAcc = (str) => {
+                return String(str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
+            };
+
+            const cleanLabel = (name) => {
+                return String(name).replace(/[_]/g, ' ').replace(/\s+/g, ' ').trim();
+            };
+
+            // Phân tích kiểu cột
+            const colProfiles = origCols.map(col => {
+                const vals = rows.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== '');
+                const uniqueVals = Array.from(new Set(vals));
+                const sampleVals = uniqueVals.slice(0, 3);
+
+                const numCount = vals.filter(v => {
+                    if (typeof v === 'number') return !isNaN(v);
+                    const s = String(v).replace(/[^0-9.-]/g, '');
+                    return s.length > 0 && !isNaN(parseFloat(s));
+                }).length;
+                const isNumeric = (numCount / Math.max(1, vals.length)) > 0.6;
+
+                const colLow = stripAcc(cleanLabel(col));
+                const isTime = ['ngay', 'thang', 'nam', 'date', 'month', 'year', 'ky', 'quy', 'time', 'period'].some(k => colLow.includes(k));
+
+                return {
+                    name: col,
+                    label: cleanLabel(col),
+                    type: isTime ? 'datetime' : (isNumeric ? 'numeric' : 'categorical'),
+                    nunique: uniqueVals.length,
+                    sample_values: sampleVals
+                };
+            });
+
+            const numCols = colProfiles.filter(c => c.type === 'numeric' && !['stt', 'id', 'index', 'so_tt'].includes(c.name.toLowerCase()) && c.nunique > 1);
+            const timeCols = colProfiles.filter(c => c.type === 'datetime');
+            const catCols = colProfiles.filter(c => c.type === 'categorical' && c.nunique >= 2 && c.nunique <= 30);
+
+            const warnings = [];
+            if (numCols.length === 0) warnings.push('Tệp không có cột số đo lường; các gợi ý chỉ tập trung vào đếm số lượng và cơ cấu phân bố theo nhóm.');
+            if (timeCols.length === 0) warnings.push('Tệp không có cột thời gian (ngày/tháng/kỳ); hệ thống không gợi ý phân tích xu hướng chu kỳ.');
+            if (catCols.length === 0) warnings.push('Tệp không có cột phân loại nhóm (2–30 giá trị); các gợi ý chuyển sang xếp hạng và tìm giá trị bất thường.');
+            if (rowCount < 10) warnings.push(`Dữ liệu có dưới 10 dòng (${rowCount} dòng), các kết luận phân tích chỉ mang tính tham khảo sơ bộ.`);
+
+            const validatedUserQs = [];
+            const allColLabels = colProfiles.map(c => c.label);
+            const allColAscii = allColLabels.map(l => stripAcc(l));
+
+            if (userQuestions && Array.isArray(userQuestions)) {
+                userQuestions.forEach(q => {
+                    const qClean = q.trim();
+                    if (!qClean) return;
+                    validatedUserQs.push(qClean);
+                    const qAscii = stripAcc(qClean);
+                    const conceptChecks = [
+                        [['doanh thu', 'revenue', 'doanh so', 'sales'], 'Doanh thu'],
+                        [['loi nhuan', 'profit', 'lai'], 'Lợi nhuận'],
+                        [['chi phi', 'cost', 'phi'], 'Chi phí'],
+                        [['chi nhanh', 'branch'], 'Chi nhánh'],
+                        [['kenh', 'channel'], 'Kênh phân phối'],
+                        [['cua hang', 'shop', 'store'], 'Cửa hàng'],
+                        [['khach hang', 'customer'], 'Khách hàng'],
+                        [['thoi gian', 'ngay', 'thang', 'nam', 'date'], 'Thời gian / Chu kỳ'],
+                        [['loi', 'phe pham', 'defect'], 'Tỷ lệ lỗi / Phế phẩm'],
+                        [['san pham', 'mat hang', 'product', 'sku'], 'Sản phẩm'],
+                        [['don hang', 'order'], 'Đơn hàng']
+                    ];
+                    conceptChecks.forEach(([kwList, label]) => {
+                        if (kwList.some(k => qAscii.includes(k))) {
+                            if (!allColAscii.some(ca => kwList.some(k => ca.includes(k)))) {
+                                const closest = catCols[0] ? catCols[0].label : (numCols[0] ? numCols[0].label : allColLabels[0]);
+                                warnings.push(`Câu hỏi '${qClean}' nhắc đến '${label}' không có trong tệp. Tệp hiện tại gồm các cột: ${allColLabels.slice(0, 6).join(', ')}. Bạn có thể đối chiếu qua cột thật '${closest}'.`);
+                            }
+                        }
+                    });
+                });
+            }
+
+            let dataDesc = `Tệp dữ liệu ghi nhận ${rowCount.toLocaleString('vi-VN')} dòng thực tế`;
+            if (numCols[0] && catCols[0]) {
+                dataDesc += `, phản ánh các chỉ số '${numCols[0].label}' phân bổ theo '${catCols[0].label}'`;
+            } else if (numCols[0]) {
+                dataDesc += `, đo lường các giá trị định lượng '${numCols[0].label}'`;
+            }
+            if (timeCols[0]) {
+                dataDesc += ` xuyên suốt các mốc '${timeCols[0].label}'`;
+            }
+            dataDesc += '. Mỗi dòng đại diện cho một bản ghi hoạt động thực tế.';
+
+            const suggestedProblems = [];
+            const questionChips = [];
+            const directions = [];
+
+            validatedUserQs.forEach(uq => {
+                const matched = colProfiles.filter(c => uq.toLowerCase().includes(c.label.toLowerCase())).map(c => c.name);
+                suggestedProblems.push({ text: uq, uses_columns: matched.length ? matched : (numCols[0] ? [numCols[0].name] : [origCols[0]]) });
+                questionChips.push({ text: uq, uses_columns: matched.length ? matched : (numCols[0] ? [numCols[0].name] : [origCols[0]]) });
+            });
+
+            if (catCols[0] && numCols[0]) {
+                const c1 = catCols[0];
+                const m1 = numCols[0];
+                const smp = c1.sample_values.slice(0, 2).join(', ');
+                const smpStr = smp ? ` (${smp})` : '';
+                const qText = `${m1.label} theo ${c1.label}${smpStr} nào cao nhất?`;
+                if (suggestedProblems.length < 5) suggestedProblems.push({ text: qText, uses_columns: [m1.name, c1.name] });
+                if (questionChips.length < 6) questionChips.push({ text: qText, uses_columns: [m1.name, c1.name] });
+            }
+
+            if (catCols[0] && numCols[0]) {
+                const c1 = catCols[0];
+                const m1 = numCols[0];
+                const qText = `${c1.label} nào chiếm phần lớn tổng ${m1.label}?`;
+                if (suggestedProblems.length < 5) suggestedProblems.push({ text: qText, uses_columns: [m1.name, c1.name] });
+                if (questionChips.length < 6) questionChips.push({ text: qText, uses_columns: [m1.name, c1.name] });
+            }
+
+            if (timeCols[0] && numCols[0]) {
+                const t1 = timeCols[0];
+                const m1 = numCols[0];
+                const qText = `${m1.label} biến động tăng giảm thế nào theo ${t1.label}?`;
+                if (suggestedProblems.length < 5) suggestedProblems.push({ text: qText, uses_columns: [m1.name, t1.name] });
+                if (questionChips.length < 6) questionChips.push({ text: qText, uses_columns: [m1.name, t1.name] });
+            }
+
+            if (numCols.length >= 2) {
+                const m1 = numCols[0];
+                const m2 = numCols[1];
+                const qText = `Chênh lệch và tương quan giữa ${m1.label} và ${m2.label} ra sao?`;
+                if (suggestedProblems.length < 5) suggestedProblems.push({ text: qText, uses_columns: [m1.name, m2.name] });
+                if (questionChips.length < 6) questionChips.push({ text: qText, uses_columns: [m1.name, m2.name] });
+            }
+
+            if (catCols[0] && numCols[0]) {
+                const c1 = catCols[0];
+                const m1 = numCols[0];
+                const qText = `${c1.label} nào ghi nhận ${m1.label} thấp nhất cần can thiệp?`;
+                if (questionChips.length < 6) questionChips.push({ text: qText, uses_columns: [m1.name, c1.name] });
+            }
+
+            return {
+                data_understanding: dataDesc,
+                suggested_problems: suggestedProblems,
+                question_chips: questionChips,
+                directions: directions,
+                warnings: warnings
+            };
         }
 
         function appendQuestionChip(questionText) {
@@ -3159,10 +3323,19 @@
             SAMPLE_DATASETS[activeDatasetKey].trendActual = tActual;
             SAMPLE_DATASETS[activeDatasetKey].trendMA7 = tMA7;
 
+            const nameEl = document.getElementById('bizCompanyNameInput');
+            const descEl = document.getElementById('bizDescriptionInput');
+            const userQ = descEl && descEl.value.trim() ? descEl.value.trim().split('\n') : [];
+            const clientSmart = generateClientSideSmartSuggestions(cleanedRows, fileName, userQ, nameEl ? nameEl.value : '');
+            if (clientSmart) {
+                renderStep1SmartSuggestions(clientSmart, true);
+            }
+
             return {
                 dataset_name: fileName,
                 table_name: tableName,
                 quality_raw: { total_rows: totalRows, total_cols: totalCols },
+                smart_suggestions: clientSmart,
                 cleaning_summary: {
                     final_rows: cleanedRows.length,
                     missing_before: missingCount,
