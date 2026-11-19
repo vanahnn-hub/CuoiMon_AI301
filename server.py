@@ -2,34 +2,15 @@ import os
 import json
 # --- NGUYÊN TẮC TỐI THƯỢNG: YÊU CẦU CỦA NGƯỜI DÙNG LÀ MỆNH LỆNH ƯU TIÊN SỐ 1 ---
 SUPREME_USER_DIRECTIVE = """NGUYÊN TẮC TỐI THƯỢNG: YÊU CẦU CỦA NGƯỜI DÙNG LÀ MỆNH LỆNH ƯU TIÊN SỐ 1.
-1. Thực hiện đúng 100% yêu cầu người dùng, kể cả khi khác mặc định hoặc đề xuất ban đầu.
-2. Tự suy luận ý định thật (hiểu viết tắt, không dấu, sai chính tả, tự map tên cột/giá trị thực tế trong dữ liệu).
-3. Bám sát dữ liệu thật, không bịa số liệu, nêu rõ lý do nếu dữ liệu thiếu.
-4. Xuyên suốt cả 5 bước: phản ánh nhất quán ở bảng dữ liệu, KPI, biểu đồ, nguyên nhân, giải pháp, báo cáo.
-5. Dữ liệu vô nghĩa / bất hợp lý: phát hiện theo ngữ cảnh cột (không dùng ngưỡng cứng), phát hiện ngoại lai (IQR) chỉ gắn cờ cảnh báo không tự xóa; giá trị âm nếu là dữ liệu thật (lỗ/hoàn tiền) giữ nguyên; phát hiện giá trị giữ chỗ, cột vô nghĩa, thông tin PII.
-6. Minh bạch & Hoàn tác: Không sửa âm thầm, ghi log chi tiết, luôn giữ bản gốc; nếu sạch nói rõ sạch, không bịa lỗi.
-7. Ưu tiên: Yêu cầu của người dùng > Bảo toàn dữ liệu gốc > Quy tắc tự động.
+ĐẦU VÀO BẠN NHẬN LUÔN GỒM: custom_query (yêu cầu người dùng), user_questions (từng câu hỏi) và columns (hồ sơ cột THẬT của tệp: tên, kiểu, số giá trị duy nhất, giá trị mẫu).
 
-QUY CHUẨN MÔ TẢ BIỂU ĐỒ, NGUYÊN NHÂN, GIẢI PHÁP VÀ BÁO CÁO (BƯỚC 3, 4, 5):
-- BƯỚC 3 (Findings F1, F2...): Mỗi biểu đồ gồm đúng 5 phần (tối đa 1-2 câu):
-  1. what_it_shows: so sánh/đo gì, đơn vị, phạm vi.
-  2. how_to_read: trục, màu, ý nghĩa cột cao/thấp.
-  3. key_numbers: 3 số nổi bật (cao nhất kèm tên, thấp nhất kèm tên, chênh lệch hoặc trung bình).
-  4. insight: điều số liệu nói lên + mức quan trọng (% tổng hoặc tiền).
-  5. action: việc cụ thể cần làm, nêu đối tượng.
-  - Mỗi câu phải có số liệu hoặc tên nhóm thật; cấm câu chung chung. Biểu đồ so sánh nhóm: 1 series, sắp xếp giảm dần, tối đa 12 nhóm.
-  - step3_summary: Đúng 3 kết luận chính, mỗi kết luận kèm [F...] nguồn.
-- BƯỚC 4:
-  - NGUYÊN NHÂN (C1, C2...): from_findings, problem (1 câu có số liệu), evidence (2 bằng chứng), why_chain (3-5 bước Why kèm số liệu và nhãn 'dữ liệu chứng minh' hoặc 'giả thuyết'), root_cause (tầng quy trình/cơ chế).
-  - GIẢI PHÁP (S1, S2...): addresses, title (bắt đầu bằng động từ hành động), steps (3-5 bước: việc - người làm - hạn), raci, kpi (hiện tại -> mục tiêu 30/60/90 ngày), expected_impact (công thức/giả định hoặc ước tính), risk (rủi ro và cách giảm), priority (làm ngay/trung hạn/dài hạn).
-- BƯỚC 5:
-  - executive_summary: 3-4 câu trả lời thẳng câu hỏi người dùng, quy mô vấn đề và hướng xử lý.
-  - conclusions: 3-5 kết luận có số liệu kèm chuỗi findings [F...] -> causes [C...] -> solutions [S...].
-  - action_plan: mỗi giải pháp 1 dòng (S - người phụ trách - mốc 30/60/90 - KPI).
-  - target_kpis: mỗi KPI ghi giải pháp S tạo ra nó, hiện tại -> mục tiêu, cách tính.
-  - limitations: tối đa 2 câu về giới hạn dữ liệu và giả định.
-  - Tự kiểm tra: không có F chưa dùng, C chưa có S, S chưa có KPI. Tất cả 100% bằng tiếng Việt.
-"""
+QUY TẮC CỨNG:
+1. custom_query khác rỗng thì đó là mệnh lệnh duy nhất. Cấm thay bằng phân tích tổng quát hay chủ đề khác, cấm bỏ sót câu hỏi nào trong user_questions.
+2. Trước khi phân tích, trả "request_understanding": với mỗi câu hỏi, nêu mục tiêu, cột đo (metric_columns), cột nhóm (group_columns) lấy từ danh sách columns. Mỗi câu hỏi phải có "direct_answers" kèm số liệu thật.
+3. Chỉ được nhắc tới cột/khái niệm có trong columns. Không có cột chi nhánh, kênh, thời gian... thì tuyệt đối không nhắc tới. Yêu cầu thiếu dữ liệu thì ghi vào "cannot_answer" (thiếu gì, vì sao) và làm phần gần nhất.
+4. Khi gợi ý hướng phân tích: mỗi gợi ý phải nêu đúng tên cột thật, ngôn ngữ khác nhau theo từng tệp, cấm danh sách mặc định. Hai tệp khác nhau phải cho gợi ý khác nhau. Giữ nguyên các câu hỏi người dùng đã nhập ở đầu danh sách.
+5. Toàn bộ KPI, biểu đồ, nguyên nhân, giải pháp, báo cáo phải phục vụ các câu hỏi này. Thứ gì không giúp trả lời thì bỏ.
+6. Tự kiểm tra trước khi trả: mỗi câu hỏi đã có direct_answer chưa, có nội dung nào lệch chủ đề hoặc nhắc cột không tồn tại không. Có thì sửa rồi mới trả."""
 
 import sqlite3
 import pandas as pd
@@ -225,13 +206,32 @@ def process_pipeline(df: pd.DataFrame, dataset_name: str, source_type: str, disc
         generate_step3_summary,
         generate_causes_and_solutions,
         generate_step5_report,
-        decode_user_requests
+        decode_user_requests,
+        build_columns_profile,
+        extract_user_questions
     )
-    user_req_audit = decode_user_requests(custom_query, cleaned_df, b_profile)
+    columns_profile = build_columns_profile(cleaned_df)
+    user_questions = extract_user_questions(custom_query)
+    user_req_audit = decode_user_requests(
+        custom_query,
+        cleaned_df,
+        business_profile=b_profile,
+        columns_profile=columns_profile,
+        user_questions=user_questions
+    )
     request_understanding = user_req_audit.get("request_understanding", [])
     cannot_answer = user_req_audit.get("cannot_answer", [])
     direct_answers = user_req_audit.get("direct_answers", [])
     audit_checklist = user_req_audit.get("audit_checklist", {})
+
+    from modules.analysis import generate_data_driven_smart_suggestions
+    smart_suggestions = generate_data_driven_smart_suggestions(
+        columns=columns_profile,
+        row_count=len(cleaned_df),
+        company_name=b_profile.get("company_name", ""),
+        extra_info=b_profile.get("description", ""),
+        user_questions=user_questions
+    )
 
     enriched_rich_charts = enrich_chart_descriptions(rich_charts, cleaned_df, custom_query=custom_query)
     step3_summary = generate_step3_summary(enriched_rich_charts)
@@ -264,6 +264,7 @@ def process_pipeline(df: pd.DataFrame, dataset_name: str, source_type: str, disc
     CURRENT_SESSION["cannot_answer"] = cannot_answer
     CURRENT_SESSION["direct_answers"] = direct_answers
     CURRENT_SESSION["audit_checklist"] = audit_checklist
+    CURRENT_SESSION["smart_suggestions"] = smart_suggestions
     
     return sanitize_for_json({
         "dataset_name": dataset_name,
@@ -290,12 +291,15 @@ def process_pipeline(df: pd.DataFrame, dataset_name: str, source_type: str, disc
         "business_profile": b_profile,
         "chosen_direction": direction,
         "custom_query": custom_query,
+        "user_questions": user_questions,
+        "columns": columns_profile,
         "user_intent_clarification": user_intent_clarification,
         "dashboard_design": dashboard_design,
         "request_understanding": request_understanding,
         "cannot_answer": cannot_answer,
         "direct_answers": direct_answers,
-        "audit_checklist": audit_checklist
+        "audit_checklist": audit_checklist,
+        "smart_suggestions": smart_suggestions
     })
 
 @app.get("/api/config-status")
@@ -577,6 +581,46 @@ def set_analyze_direction(req: AnalyzeDirectionRequest):
     ds_name = CURRENT_SESSION.get("dataset_name", "Retail_Sales_MultiBranch")
     src = CURRENT_SESSION.get("source_type", "Active Data")
     return process_pipeline(df, ds_name, src)
+
+class SuggestProblemsRequest(BaseModel):
+    columns: Optional[List[Dict[str, Any]]] = None
+    row_count: Optional[int] = 0
+    company_name: Optional[str] = ""
+    extra_info: Optional[str] = ""
+    user_questions: Optional[List[str]] = None
+
+@app.post("/api/suggest-problems-and-chips")
+def api_suggest_problems(req: SuggestProblemsRequest):
+    """Gợi ý 'Vấn đề cần phân tích' và 'Câu hỏi nhanh' chuẩn xác từ hồ sơ cột thật của tệp."""
+    from modules.analysis import generate_data_driven_smart_suggestions
+    from modules.structured_intelligence import build_columns_profile
+    
+    df = CURRENT_SESSION.get("df")
+    if df is None:
+        df = CURRENT_SESSION.get("raw_df")
+        
+    cols = req.columns
+    row_c = req.row_count or (len(df) if df is not None else 0)
+    if not cols and df is not None:
+        cols = build_columns_profile(df)
+        
+    if not cols:
+        return {
+            "data_understanding": "Chưa có dữ liệu tải lên.",
+            "suggested_problems": [],
+            "question_chips": [],
+            "directions": [],
+            "warnings": ["Vui lòng tải lên tệp dữ liệu để nhận diện các câu hỏi phân tích."]
+        }
+        
+    res = generate_data_driven_smart_suggestions(
+        columns=cols,
+        row_count=row_c,
+        company_name=req.company_name or "",
+        extra_info=req.extra_info or "",
+        user_questions=req.user_questions
+    )
+    return sanitize_for_json(res)
 
 class FollowupRequest(BaseModel):
     followup_id: Optional[str] = None
