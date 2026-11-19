@@ -753,8 +753,29 @@
                                     <span>Vấn đề cần phân tích <span class="text-rose-500 font-bold">*</span></span>
                                     <span class="text-[11px] font-semibold text-rose-500 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">Bắt buộc</span>
                                 </label>
-                                <textarea id="bizDescriptionInput" rows="3" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" oninput="clearContextValidationError(this)" placeholder="Ví dụ:&#10;Doanh thu theo kênh nào cao nhất?&#10;Chi phí theo chiến dịch nào cao nhất?" class="w-full rounded-xl border border-slate-200/90 hover:border-[#BBE4F6] bg-white px-5 py-3.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#2C5E82] focus:ring-2 focus:ring-[#BBE4F6]/40 resize-y transition shadow-2xs font-medium tracking-normal leading-relaxed"></textarea>
+                                <textarea id="bizDescriptionInput" rows="3" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" oninput="handleBizDescriptionInput(this)" placeholder="Ví dụ:&#10;Doanh thu theo kênh nào cao nhất?&#10;Chi phí theo chiến dịch nào cao nhất?" class="w-full rounded-xl border border-slate-200/90 hover:border-[#BBE4F6] bg-white px-5 py-3.5 text-sm text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-[#2C5E82] focus:ring-2 focus:ring-[#BBE4F6]/40 resize-y transition shadow-2xs font-medium tracking-normal leading-relaxed"></textarea>
                                 <p class="text-xs text-slate-400 font-normal tracking-wide mt-2">Nhập tối đa 8 câu hỏi, mỗi câu một dòng. Agent sẽ dựa vào các câu hỏi này để phân tích theo đúng yêu cầu.</p>
+                                
+                                <!-- VÙNG CẢNH BÁO KHÁI NIỆM KHÔNG TỒN TẠI TRONG DỮ LIỆU -->
+                                <div id="step1WarningsContainer" class="hidden p-3.5 rounded-xl bg-amber-50/90 border border-amber-200/90 text-xs text-amber-900 space-y-1.5 transition-all">
+                                    <div class="flex items-center gap-2 font-bold text-amber-800">
+                                        <i class="fa-solid fa-triangle-exclamation text-amber-600"></i>
+                                        <span>Lưu ý kiểm tra câu hỏi so với dữ liệu thật:</span>
+                                    </div>
+                                    <div id="step1WarningsList" class="space-y-1 text-slate-700 leading-relaxed"></div>
+                                </div>
+
+                                <!-- VÙNG GỢI Ý CÂU HỎI NHANH TỪ CỘT THẬT (QUESTION CHIPS) -->
+                                <div id="step1QuestionChipsContainer" class="hidden pt-1 space-y-2">
+                                    <div class="flex items-center justify-between text-xs font-bold text-slate-700">
+                                        <span class="flex items-center gap-1.5 text-slate-800">
+                                            <i class="fa-solid fa-wand-magic-sparkles text-[#2C5E82]"></i>
+                                            Gợi ý câu hỏi nhanh từ cột thật (bấm để thêm):
+                                        </span>
+                                        <span id="step1DataUnderstandingNote" class="text-[11px] font-normal text-slate-500 italic max-w-[60%] truncate"></span>
+                                    </div>
+                                    <div id="step1QuestionChipsList" class="flex flex-wrap gap-2"></div>
+                                </div>
                             </div>
                         </div>
 
@@ -1183,9 +1204,16 @@
                                     <div class="flex items-center gap-2 text-xs font-black text-pastel-900 uppercase tracking-wide">
                                         <span>Tóm Lược Vấn Đề &amp; Tổn Thất Tài Chính:</span>
                                     </div>
-                                    <p id="execSummaryParagraph" class="text-xs sm:text-sm text-slate-800 leading-relaxed font-medium">
-                                        Doanh thu toàn kỳ tăng trưởng <b>+12.4%</b> đạt <b>2,48 Tỷ ₫</b>, tuy nhiên biên lợi nhuận gộp giảm <b>1.6%</b> xuống còn <b>16.6%</b>. Nguyên nhân cốt lõi bắt nguồn từ 3 điểm rò rỉ: (1) <b>68 đơn hàng xuất kho bán âm lợi nhuận</b> (lỗ ròng -84,2 Tr ₫) do cộng dồn voucher vượt trần 30%; (2) <b>Tỷ lệ hoàn hủy kênh COD chạm 12.4%</b> gây lãng phí chi phí logistics 2 chiều; và (3) <b>Tồn kho phụ kiện ứ đọng kéo dài > 90 ngày</b> làm chôn vốn lưu động.
-                                    </p>
+                                    <div id="execSummaryParagraph" class="text-xs sm:text-sm text-slate-800 leading-relaxed font-medium space-y-2">
+                                        <div class="flex items-start gap-2">
+                                            <span class="px-2 py-0.5 rounded-md bg-red-100 text-red-900 border border-red-300 font-extrabold text-[11px] uppercase shrink-0 mt-0.5">Vấn đề đang gặp phải</span>
+                                            <span class="font-bold text-slate-900 leading-relaxed">Tồn tại 68 đơn hàng xuất kho bán âm lợi nhuận do cộng dồn voucher vượt trần, cùng tỷ lệ hoàn hủy kênh COD chạm 12.4%.</span>
+                                        </div>
+                                        <div class="flex items-start gap-2">
+                                            <span class="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-[11px] uppercase shrink-0 mt-0.5">Ảnh hưởng tài chính</span>
+                                            <span class="font-bold text-slate-800 leading-relaxed">Gây thâm hụt trực tiếp -84.2 Triệu ₫ lợi nhuận ròng, làm suy giảm biên lợi nhuận toàn kỳ xuống còn 16.6%.</span>
+                                        </div>
+                                    </div>
                                 </div>
 
                                 <!-- 2. BÓC TÁCH 3 NHÓM NGUYÊN NHÂN TRỌNG YẾU -->
@@ -2457,6 +2485,135 @@
             }
         }
 
+        let bizDescriptionDebounceTimer = null;
+
+        function handleBizDescriptionInput(el) {
+            clearContextValidationError(el);
+            if (bizDescriptionDebounceTimer) clearTimeout(bizDescriptionDebounceTimer);
+            bizDescriptionDebounceTimer = setTimeout(() => {
+                checkQuestionsAgainstData();
+            }, 500);
+        }
+
+        async function checkQuestionsAgainstData() {
+            const descEl = document.getElementById('bizDescriptionInput');
+            if (!descEl) return;
+            const text = descEl.value.trim();
+            const questions = text ? text.split('\n').map(q => q.trim()).filter(Boolean) : [];
+
+            const backend = window.latestBackendData;
+            const cols = backend && backend.columns ? backend.columns : null;
+            const rowCount = backend && backend.kpis ? (backend.kpis.total_records || (backend.quality_raw ? backend.quality_raw.total_rows : 0)) : 0;
+            const nameEl = document.getElementById('bizCompanyNameInput');
+            const extraEl = document.getElementById('bizExtraInfoInput');
+
+            if (!cols && (!SAMPLE_DATASETS[activeDatasetKey] || !SAMPLE_DATASETS[activeDatasetKey].previewRows)) {
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/suggest-problems-and-chips', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        columns: cols,
+                        row_count: rowCount,
+                        company_name: nameEl ? nameEl.value.trim() : '',
+                        extra_info: extraEl ? extraEl.value.trim() : '',
+                        user_questions: questions
+                    })
+                });
+                if (res.ok) {
+                    const smart = await res.json();
+                    renderStep1SmartSuggestions(smart, false);
+                }
+            } catch (e) {
+                console.warn('Lỗi kiểm tra câu hỏi theo dữ liệu:', e);
+            }
+        }
+
+        function appendQuestionChip(questionText) {
+            const descEl = document.getElementById('bizDescriptionInput');
+            if (!descEl || !questionText) return;
+            const current = descEl.value.trim();
+            const lines = current ? current.split('\n').map(s => s.trim()).filter(Boolean) : [];
+            if (lines.includes(questionText.trim())) {
+                showToast('Câu hỏi này đã có trong danh sách!');
+                return;
+            }
+            if (lines.length >= 8) {
+                showToast('Đã đạt giới hạn tối đa 8 câu hỏi!');
+                return;
+            }
+            lines.push(questionText.trim());
+            descEl.value = lines.join('\n');
+            clearContextValidationError(descEl);
+            checkQuestionsAgainstData();
+        }
+
+        function renderStep1SmartSuggestions(smartData, autoFillIfEmpty = true) {
+            if (!smartData) return;
+
+            const chipsContainer = document.getElementById('step1QuestionChipsContainer');
+            const chipsList = document.getElementById('step1QuestionChipsList');
+            const noteEl = document.getElementById('step1DataUnderstandingNote');
+            const warnContainer = document.getElementById('step1WarningsContainer');
+            const warnList = document.getElementById('step1WarningsList');
+
+            // 1. Nhận diện tệp (Data understanding)
+            if (noteEl && smartData.data_understanding) {
+                noteEl.innerText = smartData.data_understanding;
+                noteEl.title = smartData.data_understanding;
+            }
+
+            // 2. Cảnh báo câu hỏi không có trong cột hoặc thiếu dữ liệu (Warnings)
+            if (warnContainer && warnList) {
+                if (smartData.warnings && smartData.warnings.length > 0) {
+                    warnList.innerHTML = smartData.warnings.map(w => `
+                        <div class="flex items-start gap-1.5 py-0.5">
+                            <span class="text-amber-600 font-bold">•</span>
+                            <span class="text-slate-800">${w}</span>
+                        </div>
+                    `).join('');
+                    warnContainer.classList.remove('hidden');
+                } else {
+                    warnList.innerHTML = '';
+                    warnContainer.classList.add('hidden');
+                }
+            }
+
+            // 3. Question Chips gợi ý từ cột thật
+            if (chipsContainer && chipsList) {
+                const chips = smartData.question_chips || [];
+                if (chips.length > 0) {
+                    chipsList.innerHTML = chips.map(c => {
+                        const txt = typeof c === 'string' ? c : c.text;
+                        const cols = (c.uses_columns && c.uses_columns.length) ? `title="Dựa trên cột: ${c.uses_columns.join(', ')}"` : '';
+                        const safeTxt = txt.replace(/"/g, '&quot;').replace(/'/g, "\\'");
+                        return `
+                            <button type="button" ${cols} onclick="appendQuestionChip('${safeTxt}')" class="group flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white hover:bg-pastel-100 border border-slate-200 hover:border-pastel-400 text-xs text-slate-700 hover:text-pastel-900 transition shadow-2xs cursor-pointer">
+                                <span class="w-4 h-4 rounded-full bg-pastel-100 group-hover:bg-pastel-200 text-pastel-700 flex items-center justify-center text-[10px] font-bold">+</span>
+                                <span>${txt}</span>
+                            </button>
+                        `;
+                    }).join('');
+                    chipsContainer.classList.remove('hidden');
+                } else {
+                    chipsContainer.classList.add('hidden');
+                }
+            }
+
+            // 4. Tự động điền 1-2 vấn đề từ suggested_problems nếu ô còn trống
+            if (autoFillIfEmpty) {
+                const descEl = document.getElementById('bizDescriptionInput');
+                if (descEl && !descEl.value.trim() && smartData.suggested_problems && smartData.suggested_problems.length > 0) {
+                    const topProblems = smartData.suggested_problems.slice(0, 3).map(p => typeof p === 'string' ? p : p.text);
+                    descEl.value = topProblems.join('\n');
+                    clearContextValidationError(descEl);
+                }
+            }
+        }
+
         function clearContextValidationError(el) {
             if (el) {
                 el.classList.remove('border-rose-400', 'ring-2', 'ring-rose-200');
@@ -2595,20 +2752,19 @@
                             SAMPLE_DATASETS['custom'].grouped_issues = [];
                         }
 
-                        // Tự động gợi ý điền thông minh Bối cảnh doanh nghiệp nếu còn trống
+                        // Tự động gợi ý điền thông minh Bối cảnh doanh nghiệp từ dữ liệu thật
                         const nameEl = document.getElementById('bizCompanyNameInput');
-                        const descEl = document.getElementById('bizDescriptionInput');
                         const isManuf = (serverData.dataset_name && /san_xuat|nha_may|loi|ca|chuyen/i.test(serverData.dataset_name)) ||
                                         (serverData.cleaned_preview && serverData.cleaned_preview.length > 0 && 
                                          Object.keys(serverData.cleaned_preview[0]).some(k => /ca|day_chuyen|loi|phe_pham|san_luong/i.test(k)));
 
                         if (nameEl && !nameEl.value.trim()) {
-                            nameEl.value = isManuf ? 'Sản xuất & Vận hành nhà máy' : 'Bán lẻ & Chuỗi phân phối';
+                            nameEl.value = isManuf ? 'Sản xuất & Vận hành nhà máy' : 'Doanh nghiệp thương mại & Phân phối';
                             clearContextValidationError(nameEl);
                         }
-                        if (descEl && !descEl.value.trim()) {
-                            descEl.value = isManuf ? 'Phân tích theo ca và tỷ lệ lỗi\nHiệu suất giữa các dây chuyền' : 'Doanh thu theo kênh nào cao nhất?\nChi phí theo chi nhánh nào cao nhất?';
-                            clearContextValidationError(descEl);
+
+                        if (serverData.smart_suggestions) {
+                            renderStep1SmartSuggestions(serverData.smart_suggestions, true);
                         }
 
                         applyBackendPipelineResult(serverData);
@@ -2799,18 +2955,14 @@
 
                 // Tự động gợi ý điền thông minh Bối cảnh doanh nghiệp nếu còn trống
                 const nameEl = document.getElementById('bizCompanyNameInput');
-                const descEl = document.getElementById('bizDescriptionInput');
                 const normalizeCol = str => (str || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
                 const isManuf = colKeys.some(c => ['ca', 'day chuyen', 'loi', 'ty le loi', 'phe pham'].some(w => normalizeCol(c).includes(w))) || file.name.toLowerCase().includes('san_xuat');
 
                 if (nameEl && !nameEl.value.trim()) {
-                    nameEl.value = isManuf ? 'Sản xuất & Vận hành nhà máy' : 'Bán lẻ & Chuỗi phân phối';
+                    nameEl.value = isManuf ? 'Sản xuất & Vận hành nhà máy' : 'Doanh nghiệp thương mại & Phân phối';
                     clearContextValidationError(nameEl);
                 }
-                if (descEl && !descEl.value.trim()) {
-                    descEl.value = isManuf ? 'Phân tích theo ca và tỷ lệ lỗi\nHiệu suất giữa các dây chuyền' : 'Doanh thu theo kênh nào cao nhất?\nChi phí theo chi nhánh nào cao nhất?';
-                    clearContextValidationError(descEl);
-                }
+                setTimeout(() => { checkQuestionsAgainstData(); }, 300);
 
                 activeDatasetKey = 'custom';
                 if (!SAMPLE_DATASETS['custom']) {
@@ -4166,6 +4318,9 @@ async function submitStep2DirectCleaning() {
             }
 
             window.latestBackendData = data;
+            if (data.smart_suggestions) {
+                renderStep1SmartSuggestions(data.smart_suggestions, false);
+            }
             if (!window.initialBackendData || !data.user_request_applied || data.user_request_applied === 'Đã làm sạch lại theo quy tắc') {
                 window.initialBackendData = JSON.parse(JSON.stringify(data));
             }
@@ -4352,15 +4507,38 @@ async function submitStep2DirectCleaning() {
                 }
             }
 
-            // TÓM TẮT ĐIỀU HÀNH BƯỚC 4 & 5 (BÁM SÁT YÊU CẦU ĐỊNH HƯỚNG VÀ DỮ LIỆU)
+            // TÓM TẮT ĐIỀU HÀNH BƯỚC 4 & 5 (TÓM TẮT NGẮN GỌN VẤN ĐỀ VÀ ẢNH HƯỞNG TÀI CHÍNH)
             if (document.getElementById('execSummaryParagraph')) {
-                const primaryInsight = (data.insights && data.insights[0]) ? data.insights[0] : null;
-                if (data.custom_query && data.custom_query.trim()) {
-                    document.getElementById('execSummaryParagraph').innerHTML = `<b>[Trọng tâm theo yêu cầu: "${data.custom_query.trim()}"]:</b> ${primaryInsight ? primaryInsight.finding : 'Hệ thống đã nhận diện yêu cầu và phân tích trực diện dựa trên dữ liệu các hàng và cột thực tế.'}`;
-                } else if (primaryInsight) {
-                    document.getElementById('execSummaryParagraph').innerHTML = `<b>[Tóm tắt điều hành]:</b> ${primaryInsight.finding} ${primaryInsight.evidence ? `(${primaryInsight.evidence})` : ''}`;
+                const rep = data.step5_report;
+                const execText = (rep && rep.executive_summary) ? rep.executive_summary : '';
+                
+                if (execText && (execText.includes('Vấn đề cốt lõi:') || execText.includes('Ảnh hưởng tài chính:'))) {
+                    const parts = execText.split('|');
+                    const probPart = (parts[0] || '').replace(/^Vấn đề cốt lõi:\s*/i, '').trim();
+                    const finPart = (parts[1] || '').replace(/^Ảnh hưởng tài chính:\s*/i, '').trim();
+                    document.getElementById('execSummaryParagraph').innerHTML = `
+                        <div class="space-y-2">
+                            <div class="flex items-start gap-2">
+                                <span class="px-2 py-0.5 rounded-md bg-red-100 text-red-900 border border-red-300 font-extrabold text-[11px] uppercase shrink-0 mt-0.5">Vấn đề đang gặp phải</span>
+                                <span class="font-bold text-slate-900 leading-relaxed">${probPart}</span>
+                            </div>
+                            <div class="flex items-start gap-2">
+                                <span class="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-[11px] uppercase shrink-0 mt-0.5">Ảnh hưởng tài chính</span>
+                                <span class="font-bold text-slate-800 leading-relaxed">${finPart}</span>
+                            </div>
+                        </div>
+                    `;
+                } else if (execText) {
+                    document.getElementById('execSummaryParagraph').innerHTML = `<span class="leading-relaxed font-bold text-slate-800">${execText}</span>`;
                 } else {
-                    document.getElementById('execSummaryParagraph').innerHTML = `Doanh thu toàn kỳ đạt <b>${formatVND(k.total_revenue)}</b> trên tổng số <b>${k.total_records} bản ghi</b>. Dữ liệu phân bổ ổn định và đã sẵn sàng cho các quyết định chiến lược.`;
+                    const primaryInsight = (data.insights && data.insights[0]) ? data.insights[0] : null;
+                    if (data.custom_query && data.custom_query.trim()) {
+                        document.getElementById('execSummaryParagraph').innerHTML = `<b>[Trọng tâm theo yêu cầu: "${data.custom_query.trim()}"]:</b> ${primaryInsight ? primaryInsight.finding : 'Hệ thống đã nhận diện yêu cầu và phân tích trực diện dựa trên dữ liệu các hàng và cột thực tế.'}`;
+                    } else if (primaryInsight) {
+                        document.getElementById('execSummaryParagraph').innerHTML = `<b>[Tóm tắt điều hành]:</b> ${primaryInsight.finding} ${primaryInsight.evidence ? `(${primaryInsight.evidence})` : ''}`;
+                    } else {
+                        document.getElementById('execSummaryParagraph').innerHTML = `Doanh thu toàn kỳ đạt <b>${formatVND(k.total_revenue)}</b> trên tổng số <b>${k.total_records} bản ghi</b>. Dữ liệu phân bổ ổn định và đã sẵn sàng cho các quyết định chiến lược.`;
+                    }
                 }
             }
 
@@ -4660,10 +4838,29 @@ async function submitStep2DirectCleaning() {
             const actionList = document.getElementById('reportActionCardsList');
             const kpiTableBody = document.getElementById('reportTargetKpiTableBody');
 
-            // 1. Executive Summary ở đầu Bước 5
+            // 1. Executive Summary ở đầu Bước 5: Tóm tắt ngắn gọn vấn đề và ảnh hưởng tài chính
             const pExec = document.getElementById('execSummaryParagraph');
             if (pExec && rep && rep.executive_summary) {
-                pExec.innerHTML = `<b>[Tóm tắt điều hành]:</b> ${rep.executive_summary}`;
+                const text = rep.executive_summary;
+                if (text.includes('Vấn đề cốt lõi:') || text.includes('Ảnh hưởng tài chính:')) {
+                    const parts = text.split('|');
+                    const probPart = (parts[0] || '').replace(/^Vấn đề cốt lõi:\s*/i, '').trim();
+                    const finPart = (parts[1] || '').replace(/^Ảnh hưởng tài chính:\s*/i, '').trim();
+                    pExec.innerHTML = `
+                        <div class="space-y-2">
+                            <div class="flex items-start gap-2">
+                                <span class="px-2 py-0.5 rounded-md bg-red-100 text-red-900 border border-red-300 font-extrabold text-[11px] uppercase shrink-0 mt-0.5">Vấn đề đang gặp phải</span>
+                                <span class="font-bold text-slate-900 leading-relaxed">${probPart}</span>
+                            </div>
+                            <div class="flex items-start gap-2">
+                                <span class="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300 font-extrabold text-[11px] uppercase shrink-0 mt-0.5">Ảnh hưởng tài chính</span>
+                                <span class="font-bold text-slate-800 leading-relaxed">${finPart}</span>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    pExec.innerHTML = `<span class="leading-relaxed font-bold text-slate-800">${text}</span>`;
+                }
             }
 
             // 2. MỤC 3.1: KẾT LUẬN ĐIỀU HÀNH KÈM CHUỖI [F] -> [C] -> [S]

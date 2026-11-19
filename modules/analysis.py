@@ -1248,6 +1248,25 @@ def generate_followup_suggestions(
             neg_metric = mc
             break
 
+    # 0. QUY TẮC CỨNG 4: GIỮ NGUYÊN CÁC CÂU HỎI NGƯỜI DÙNG ĐÃ NHẬP Ở ĐẦU DANH SÁCH
+    if custom_query and custom_query.strip():
+        user_qs = [q.strip() for q in re.split(r'[?\n;]+', custom_query) if len(q.strip()) >= 3]
+        for q_idx, uq in enumerate(user_qs, 1):
+            clean_q_title = uq if len(uq) <= 60 else (uq[:57] + "...")
+            suggestions.append({
+                "id": f"user_query_suggestion_{q_idx}",
+                "tag": "YÊU CẦU CỦA BẠN",
+                "tag_color": "bg-pastel-700 text-white border-pastel-800",
+                "gap_badge": f"Câu hỏi #{q_idx} do bạn nhập",
+                "gap_reason": f"Ưu tiên trả lời trực diện câu hỏi của bạn: '{uq}' dựa trên các cột thực tế của bảng dữ liệu.",
+                "title": clean_q_title,
+                "description": f"Phân tích chuyên sâu và trả lời trực tiếp cho câu hỏi: '{uq}'.",
+                "button_text": "Xem phân tích yêu cầu này",
+                "chart_type": "bar",
+                "type": "bar",
+                "is_user_query": True
+            })
+
     # GỢI Ý 1: Dựa trên Chiều phân loại chính & Chỉ số đo lường chính thực tế
     if dim_cols and rev_col:
         d_main = dim_cols[0]
@@ -1369,7 +1388,7 @@ def generate_followup_suggestions(
             "deep_dive_insight": f"**Ma trận phân tích chéo '{d1}' x '{d2}':**\n- Sự phối hợp giữa các nhóm bộc lộ độ lệch hiệu suất rõ rệt.\n- **Đề xuất hành động**: Tái cơ cấu nguồn lực theo các giao điểm đem lại hiệu quả cao nhất."
         })
 
-    return suggestions[:4]
+    return suggestions[:6] if (custom_query and custom_query.strip()) else suggestions[:4]
 
 def build_deep_dive_details(
     followup_id: str,
@@ -2129,4 +2148,251 @@ def design_tailored_dashboard(
         "title": f"Bảng Điều Hành: {custom_query if custom_query else 'Phân Tích Toàn Diện'}",
         "kpis": final_kpis,
         "charts": final_charts
+    }
+
+# =========================================================================
+# NHIỆM VỤ: GỢI Ý "VẤN ĐỀ CẦN PHÂN TÍCH" VÀ "CÂU HỎI NHANH" TỪ DỮ LIỆU THẬT
+# =========================================================================
+def clean_col_label(col_name: str) -> str:
+    """Loại bỏ ký tự gạch dưới và khoảng trắng thừa để tên cột tự nhiên khi hiển thị."""
+    s = str(col_name).replace('_', ' ').replace('-', ' ').strip()
+    s = re.sub(r'\s+', ' ', s)
+    return s
+
+def generate_data_driven_smart_suggestions(
+    columns: List[Dict[str, Any]],
+    row_count: int,
+    company_name: str = "",
+    extra_info: str = "",
+    user_questions: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    NHIỆM VỤ: GỢI Ý "VẤN ĐỀ CẦN PHÂN TÍCH" VÀ "CÂU HỎI NHANH" TỪ DỮ LIỆU NGƯỜI DÙNG VỪA TẢI LÊN.
+    Tuân thủ tuyệt đối quy trình 4 bước và định dạng JSON hợp lệ:
+    1. Chỉ gợi ý điều mà dữ liệu này trả lời được; nhắc đúng tên cột thật (hoặc giá trị mẫu thật).
+    2. Cấm nhắc khái niệm không có trong cột hoặc giá trị (kênh, chi nhánh, khách hàng, lợi nhuận...).
+    3. Hai tệp khác nhau phải cho kết quả khác nhau.
+    4. Bối cảnh doanh nghiệp chỉ dùng để ưu tiên thứ tự, không thêm chủ đề ngoài dữ liệu.
+    """
+    all_col_names = [c["name"] for c in columns]
+    all_col_labels = [clean_col_label(c["name"]) for c in columns]
+
+    # Bước 1. Xác định thành phần phân tích có thật
+    # Chỉ số đo lường: Cột số (bỏ qua mã/ID chỉ để định danh và cột chỉ có 1 giá trị)
+    num_cols = [
+        c for c in columns 
+        if c.get("type") == "numeric" and not (
+            c["name"].lower() in ["stt", "id", "index", "so_tt"] or 
+            c.get("nunique", 0) == row_count or 
+            c.get("nunique", 0) <= 1
+        )
+    ]
+    if not num_cols:
+        num_cols = [c for c in columns if c.get("type") == "numeric" and c.get("nunique", 0) > 1]
+
+    # Chiều thời gian: Cột ngày/tháng/kỳ
+    import unicodedata
+    def _strip_acc(text: str) -> str:
+        t = unicodedata.normalize('NFD', str(text or ''))
+        return ''.join(c for c in t if unicodedata.category(c) != 'Mn').replace('đ', 'd').replace('Đ', 'D').lower()
+
+    time_cols = [
+        c for c in columns 
+        if c.get("type") == "datetime" or any(
+            k in _strip_acc(clean_col_label(c["name"])) 
+            for k in ["thang", "ngay", "date", "month", "year", "nam", "ky", "quy", "time", "period"]
+        )
+    ]
+
+    # Chiều so sánh: Cột phân loại có 2–30 giá trị duy nhất
+    cat_cols = [
+        c for c in columns 
+        if c.get("type") in ["categorical", "text"] and c not in time_cols and 2 <= c.get("nunique", 0) <= 30
+    ]
+    if not cat_cols:
+        cat_cols = [
+            c for c in columns 
+            if c not in num_cols and c not in time_cols and 2 <= c.get("nunique", 0) <= 50
+        ]
+
+    warnings = []
+
+    # Cảnh báo thiếu thành phần (theo quy định)
+    if not num_cols:
+        warnings.append("Tệp không có cột số đo lường; các gợi ý chỉ tập trung vào đếm số lượng và cơ cấu phân bố theo nhóm.")
+    if not time_cols:
+        warnings.append("Tệp không có cột thời gian (ngày/tháng/kỳ); hệ thống không gợi ý phân tích xu hướng chu kỳ.")
+    if not cat_cols:
+        warnings.append("Tệp không có cột phân loại nhóm (2–30 giá trị); các gợi ý chuyển sang xếp hạng và tìm giá trị bất thường.")
+    if row_count < 10:
+        warnings.append(f"Dữ liệu có dưới 10 dòng ({row_count} dòng), các kết luận phân tích chỉ mang tính tham khảo sơ bộ.")
+
+    # Kiểm tra user_questions nếu có
+    import unicodedata
+    def _strip_acc(text: str) -> str:
+        t = unicodedata.normalize('NFD', str(text or ''))
+        return ''.join(c for c in t if unicodedata.category(c) != 'Mn').replace('đ', 'd').replace('Đ', 'D').lower()
+
+    all_col_ascii = [_strip_acc(clean_col_label(c)) for c in all_col_names]
+
+    validated_user_qs = []
+    if user_questions:
+        for q in user_questions:
+            q_clean = q.strip()
+            if not q_clean:
+                continue
+            validated_user_qs.append(q_clean)
+            q_ascii = _strip_acc(q_clean)
+            concept_checks = [
+                (["doanh thu", "revenue", "doanh so", "sales"], "Doanh thu"),
+                (["loi nhuan", "profit", "lai"], "Lợi nhuận"),
+                (["chi phi", "cost", "phi"], "Chi phí"),
+                (["chi nhanh", "branch"], "Chi nhánh"),
+                (["kenh", "channel"], "Kênh phân phối"),
+                (["cua hang", "shop", "store"], "Cửa hàng"),
+                (["khach hang", "customer"], "Khách hàng"),
+                (["thoi gian", "ngay", "thang", "nam", "date"], "Thời gian / Chu kỳ"),
+                (["loi", "phe pham", "defect"], "Tỷ lệ lỗi / Phế phẩm"),
+                (["san pham", "mat hang", "product", "sku"], "Sản phẩm"),
+                (["don hang", "order"], "Đơn hàng")
+            ]
+            for keywords, label in concept_checks:
+                if any(k in q_ascii for k in keywords):
+                    if not any(any(k in col_a for k in keywords) for col_a in all_col_ascii):
+                        closest_col = cat_cols[0]["name"] if cat_cols else (num_cols[0]["name"] if num_cols else all_col_names[0])
+                        warnings.append(
+                            f"Câu hỏi '{q_clean}' nhắc đến '{label}' không có trong tệp. Tệp hiện tại gồm các cột: {', '.join(all_col_labels[:6])}. "
+                            f"Bạn có thể đối chiếu qua cột thật '{clean_col_label(closest_col)}'."
+                        )
+
+    # Bước 1. data_understanding: 1-2 câu tệp chứa gì, mỗi dòng đại diện cho cái gì
+    data_desc_parts = []
+    if num_cols and cat_cols:
+        data_desc_parts.append(f"Tệp dữ liệu ghi nhận {row_count:,} dòng thực tế, phản ánh các chỉ số '{clean_col_label(num_cols[0]['name'])}' phân bổ theo '{clean_col_label(cat_cols[0]['name'])}'")
+    elif num_cols:
+        data_desc_parts.append(f"Tệp gồm {row_count:,} dòng đo lường các giá trị định lượng '{clean_col_label(num_cols[0]['name'])}'")
+    elif cat_cols:
+        data_desc_parts.append(f"Tệp gồm {row_count:,} dòng phân loại các nhóm '{clean_col_label(cat_cols[0]['name'])}'")
+    else:
+        data_desc_parts.append(f"Tệp dữ liệu gồm {row_count:,} dòng với các trường thông tin {', '.join(all_col_labels[:4])}")
+
+    if time_cols:
+        data_desc_parts.append(f"xuyên suốt các mốc '{clean_col_label(time_cols[0]['name'])}'")
+    data_understanding = " ".join(data_desc_parts) + ". Mỗi dòng đại diện cho một bản ghi hoạt động thực tế."
+
+    suggested_problems = []
+    question_chips = []
+    directions = []
+
+    # Giữ nguyên user_questions ở đầu danh sách
+    for uq in validated_user_qs:
+        matched_cols = [c["name"] for c in columns if clean_col_label(c["name"]).lower() in uq.lower()]
+        if not matched_cols and num_cols:
+            matched_cols = [num_cols[0]["name"]]
+        suggested_problems.append({"text": uq, "uses_columns": matched_cols})
+        question_chips.append({"text": uq, "uses_columns": matched_cols})
+
+    # Bước 2 & 3. Sinh các gợi ý mới từ cột thật và kiểm tra tính khả thi
+    # 1. So sánh & Xếp hạng (Category x Metric)
+    if cat_cols and num_cols:
+        c1 = cat_cols[0]
+        m1 = num_cols[0]
+        samples = c1.get("sample_values", [])[:2]
+        sample_str = f" ({', '.join(samples)})" if samples else ""
+        q_text = f"{clean_col_label(m1['name'])} theo {clean_col_label(c1['name'])}{sample_str} nào cao nhất?"
+        if len(suggested_problems) < 5:
+            suggested_problems.append({"text": q_text, "uses_columns": [m1["name"], c1["name"]]})
+        if len(question_chips) < 6:
+            question_chips.append({"text": q_text, "uses_columns": [m1["name"], c1["name"]]})
+
+    # 2. Tập trung / Cơ cấu phần trăm
+    if cat_cols and num_cols:
+        c_use = cat_cols[1] if len(cat_cols) > 1 else cat_cols[0]
+        m_use = num_cols[0]
+        q_text = f"{clean_col_label(c_use['name'])} nào chiếm phần lớn tổng {clean_col_label(m_use['name'])}?"
+        if len(suggested_problems) < 5:
+            suggested_problems.append({"text": q_text, "uses_columns": [m_use["name"], c_use["name"]]})
+        if len(question_chips) < 6:
+            question_chips.append({"text": q_text, "uses_columns": [m_use["name"], c_use["name"]]})
+
+    # 3. Xu hướng theo thời gian (nếu có cột thời gian)
+    if time_cols and num_cols:
+        t1 = time_cols[0]
+        m_use = num_cols[0]
+        q_text = f"{clean_col_label(m_use['name'])} biến động tăng giảm thế nào theo {clean_col_label(t1['name'])}?"
+        if len(suggested_problems) < 5:
+            suggested_problems.append({"text": q_text, "uses_columns": [m_use["name"], t1["name"]]})
+        if len(question_chips) < 6:
+            question_chips.append({"text": q_text, "uses_columns": [m_use["name"], t1["name"]]})
+
+    # 4. Chênh lệch / Tương quan giữa 2 chỉ số đo lường
+    if len(num_cols) >= 2:
+        m1 = num_cols[0]
+        m2 = num_cols[1]
+        q_text = f"Chênh lệch và tương quan giữa {clean_col_label(m1['name'])} và {clean_col_label(m2['name'])} ra sao?"
+        if len(suggested_problems) < 5:
+            suggested_problems.append({"text": q_text, "uses_columns": [m1["name"], m2["name"]]})
+        if len(question_chips) < 6:
+            question_chips.append({"text": q_text, "uses_columns": [m1["name"], m2["name"]]})
+
+    # 5. Phân tích điểm bất thường / đáy bảng
+    if cat_cols and num_cols:
+        c1 = cat_cols[0]
+        m1 = num_cols[0]
+        q_text = f"{clean_col_label(c1['name'])} nào ghi nhận {clean_col_label(m1['name'])} thấp nhất cần can thiệp?"
+        if len(suggested_problems) < 5:
+            suggested_problems.append({"text": q_text, "uses_columns": [m1["name"], c1["name"]]})
+        if len(question_chips) < 6:
+            question_chips.append({"text": q_text, "uses_columns": [m1["name"], c1["name"]]})
+
+    # Nếu vẫn chưa đủ (ví dụ tệp chỉ có 1 cột số hoặc không có phân loại)
+    if not cat_cols and num_cols:
+        m1 = num_cols[0]
+        q_text = f"Các giá trị cao nhất và thấp nhất của {clean_col_label(m1['name'])} chênh lệch bao nhiêu?"
+        if len(suggested_problems) < 5:
+            suggested_problems.append({"text": q_text, "uses_columns": [m1["name"]]})
+        if len(question_chips) < 6:
+            question_chips.append({"text": q_text, "uses_columns": [m1["name"]]})
+
+    # directions: 3-4 hướng tổng thể
+    if cat_cols and num_cols:
+        c1 = cat_cols[0]
+        m1 = num_cols[0]
+        directions.append({
+            "title": f"Xếp hạng & So sánh theo {clean_col_label(c1['name'])}",
+            "description": f"Đối chiếu {clean_col_label(m1['name'])} giữa các {clean_col_label(c1['name'])} để nhận diện đơn vị dẫn đầu và nhóm tụt hậu.",
+            "uses_columns": [m1["name"], c1["name"]]
+        })
+
+    if time_cols and num_cols:
+        t1 = time_cols[0]
+        m1 = num_cols[0]
+        directions.append({
+            "title": f"Xu hướng chu kỳ theo {clean_col_label(t1['name'])}",
+            "description": f"Đánh giá tốc độ tăng trưởng và tính chu kỳ của {clean_col_label(m1['name'])} qua từng mốc {clean_col_label(t1['name'])}.",
+            "uses_columns": [m1["name"], t1["name"]]
+        })
+
+    if len(num_cols) >= 2:
+        m1 = num_cols[0]
+        m2 = num_cols[1]
+        directions.append({
+            "title": f"Cân đối chỉ số: {clean_col_label(m1['name'])} & {clean_col_label(m2['name'])}",
+            "description": f"Phân tích quan hệ tỷ lệ và khoảng chênh giữa {clean_col_label(m1['name'])} và {clean_col_label(m2['name'])} nhằm tối ưu hiệu quả.",
+            "uses_columns": [m1["name"], m2["name"]]
+        })
+
+    primary_col = num_cols[0]["name"] if num_cols else all_col_names[0]
+    directions.append({
+        "title": "Rà soát rủi ro & Giá trị ngoại lai",
+        "description": f"Phát hiện các điểm bất thường và rò rỉ trên các trường dữ liệu hiện có.",
+        "uses_columns": [primary_col]
+    })
+
+    return {
+        "data_understanding": data_understanding,
+        "suggested_problems": suggested_problems[:5],
+        "question_chips": question_chips[:6],
+        "directions": directions[:4],
+        "warnings": warnings
     }
