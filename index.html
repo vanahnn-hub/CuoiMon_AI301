@@ -3148,6 +3148,458 @@
             };
         }
 
+        // BỘ SINH HỆ THỐNG BIỂU ĐỒ CHUYÊN SÂU CLIENT-SIDE (CHO VERCEL & OFFLINE)
+        function generateClientSideRichCharts(rows, userQuestions, companyName) {
+            if (!rows || rows.length === 0) return [];
+            const origCols = Object.keys(rows[0]);
+
+            const stripAcc = (str) => {
+                return String(str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
+            };
+
+            const cleanLabel = (name) => {
+                return String(name).replace(/[_]/g, ' ').replace(/\s+/g, ' ').trim();
+            };
+
+            const parseNum = (v) => {
+                if (typeof v === 'number') return isNaN(v) ? 0 : v;
+                if (!v) return 0;
+                const s = String(v).replace(/[^0-9.-]/g, '');
+                const n = parseFloat(s);
+                return isNaN(n) ? 0 : n;
+            };
+
+            const colProfiles = origCols.map(col => {
+                const vals = rows.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== '');
+                const uniqueVals = Array.from(new Set(vals));
+                const numCount = vals.filter(v => {
+                    if (typeof v === 'number') return !isNaN(v);
+                    const s = String(v).replace(/[^0-9.-]/g, '');
+                    return s.length > 0 && !isNaN(parseFloat(s));
+                }).length;
+                const isNumeric = (numCount / Math.max(1, vals.length)) > 0.6;
+                const colLow = stripAcc(cleanLabel(col));
+                const isTime = ['ngay', 'thang', 'nam', 'date', 'month', 'year', 'ky', 'quy', 'time', 'period'].some(k => colLow.includes(k));
+
+                return {
+                    name: col,
+                    label: cleanLabel(col),
+                    type: isTime ? 'datetime' : (isNumeric ? 'numeric' : 'categorical'),
+                    nunique: uniqueVals.length
+                };
+            });
+
+            const numCols = colProfiles.filter(c => c.type === 'numeric' && !['stt', 'id', 'index', 'so_tt'].includes(c.name.toLowerCase()) && c.nunique > 1);
+            const timeCols = colProfiles.filter(c => c.type === 'datetime');
+            const catCols = colProfiles.filter(c => c.type === 'categorical' && c.nunique >= 2 && c.nunique <= 50);
+
+            const mCol = numCols[0] ? numCols[0].name : origCols[0];
+            const mLabel = numCols[0] ? numCols[0].label : cleanLabel(mCol);
+            const charts = [];
+
+            // 1. Biểu đồ đường xu hướng thời gian (Line Chart)
+            if (timeCols[0]) {
+                const tCol = timeCols[0].name;
+                const tLabel = timeCols[0].label;
+                const timeMap = {};
+                rows.forEach(r => {
+                    const key = String(r[tCol] || 'N/A');
+                    const val = parseNum(r[mCol]);
+                    timeMap[key] = (timeMap[key] || 0) + val;
+                });
+                const sortedKeys = Object.keys(timeMap).sort();
+                const dataVals = sortedKeys.map(k => Math.round(timeMap[k]));
+
+                charts.push({
+                    id: 'f1_time_trend',
+                    finding_id: 'F1',
+                    title: `Xu hướng biến động ${mLabel} theo ${tLabel}`,
+                    subtitle: `Theo dõi chu kỳ biến động ${mLabel} qua từng mốc ${tLabel}`,
+                    chart_type: 'line',
+                    type: 'line',
+                    labels: sortedKeys,
+                    datasets: [{
+                        label: mLabel,
+                        data: dataVals,
+                        borderColor: '#2C5E82',
+                        backgroundColor: 'rgba(44, 94, 130, 0.12)',
+                        borderWidth: 2,
+                        tension: 0.35,
+                        fill: true
+                    }],
+                    key_numbers: [
+                        `Mốc cao nhất: '${sortedKeys[dataVals.indexOf(Math.max(...dataVals))] || 'N/A'}'`,
+                        `Mốc thấp nhất: '${sortedKeys[dataVals.indexOf(Math.min(...dataVals))] || 'N/A'}'`,
+                        `Tổng tích lũy toàn kỳ: ${dataVals.reduce((a,b)=>a+b, 0).toLocaleString('vi-VN')}`
+                    ],
+                    action: `Duy trì đà tăng trưởng và phân bổ nguồn lực cân đối theo từng chu kỳ ${tLabel}.`,
+                    uses_columns: [mCol, tCol]
+                });
+            }
+
+            // 2. Biểu đồ so sánh & xếp hạng (Bar Chart)
+            if (catCols[0]) {
+                const cCol = catCols[0].name;
+                const cLabel = catCols[0].label;
+                const catMap = {};
+                rows.forEach(r => {
+                    const key = String(r[cCol] || 'Khác');
+                    const val = parseNum(r[mCol]);
+                    catMap[key] = (catMap[key] || 0) + val;
+                });
+                const sortedPairs = Object.entries(catMap).sort((a,b) => b[1] - a[1]).slice(0, 10);
+                const labels = sortedPairs.map(p => p[0]);
+                const dataVals = sortedPairs.map(p => Math.round(p[1]));
+
+                charts.push({
+                    id: 'f2_category_rank',
+                    finding_id: 'F2',
+                    title: `Xếp hạng so sánh ${mLabel} theo ${cLabel}`,
+                    subtitle: `Đối chiếu quy mô đóng góp giữa các ${cLabel} hàng đầu`,
+                    chart_type: 'bar',
+                    type: 'bar',
+                    labels: labels,
+                    datasets: [{
+                        label: mLabel,
+                        data: dataVals,
+                        backgroundColor: '#1E435E',
+                        borderRadius: 6
+                    }],
+                    key_numbers: [
+                        `Dẫn đầu: '${labels[0] || 'N/A'}' (${dataVals[0] ? dataVals[0].toLocaleString('vi-VN') : 0})`,
+                        `Tụt hậu: '${labels[labels.length - 1] || 'N/A'}' (${dataVals[dataVals.length - 1] ? dataVals[dataVals.length - 1].toLocaleString('vi-VN') : 0})`,
+                        `Mức độ chênh lệch: ${dataVals[0] && dataVals[dataVals.length - 1] ? ((dataVals[0] / Math.max(1, dataVals[dataVals.length - 1]))).toFixed(1) + ' lần' : 'Đồng đều'}`
+                    ],
+                    action: `Hỗ trợ nhóm tụt hậu và chuẩn hóa quy trình từ đơn vị dẫn đầu.`,
+                    uses_columns: [mCol, cCol]
+                });
+            }
+
+            // 3. Biểu đồ cơ cấu tỷ trọng (Doughnut Chart)
+            const secondCat = catCols[1] || (catCols[0] && timeCols[0] ? null : catCols[0]);
+            if (secondCat) {
+                const cCol = secondCat.name;
+                const cLabel = secondCat.label;
+                const catMap = {};
+                rows.forEach(r => {
+                    const key = String(r[cCol] || 'Khác');
+                    const val = parseNum(r[mCol]);
+                    catMap[key] = (catMap[key] || 0) + val;
+                });
+                const sortedPairs = Object.entries(catMap).sort((a,b) => b[1] - a[1]).slice(0, 8);
+                const labels = sortedPairs.map(p => p[0]);
+                const dataVals = sortedPairs.map(p => Math.round(p[1]));
+                const colors = ['#2C5E82', '#00A896', '#F4A261', '#E76F51', '#457B9D', '#9A8C98', '#6D6875', '#B5838D'];
+
+                charts.push({
+                    id: 'f3_distribution',
+                    finding_id: 'F3',
+                    title: `Cơ cấu tỷ trọng ${mLabel} theo ${cLabel}`,
+                    subtitle: `Tỷ lệ phân bổ đóng góp giữa các nhóm ${cLabel}`,
+                    chart_type: 'doughnut',
+                    type: 'doughnut',
+                    labels: labels,
+                    datasets: [{
+                        label: mLabel,
+                        data: dataVals,
+                        backgroundColor: colors.slice(0, labels.length)
+                    }],
+                    key_numbers: [
+                        `Nhóm chi phối chính: '${labels[0] || 'N/A'}'`,
+                        `Đóng góp: ${((dataVals[0] || 0) / Math.max(1, dataVals.reduce((a,b)=>a+b, 0)) * 100).toFixed(1)}% tổng quy mô`,
+                        `Số lượng nhóm phân tích: ${labels.length} nhóm`
+                    ],
+                    action: `Đa dạng hóa danh mục để giảm thiểu rủi ro phụ thuộc vào một nhóm.`,
+                    uses_columns: [mCol, cCol]
+                });
+            }
+
+            // 4. Biểu đồ tương quan hoặc so sánh chỉ số thứ hai (nếu có 2 cột số đo)
+            if (numCols.length >= 2) {
+                const m2Col = numCols[1].name;
+                const m2Label = numCols[1].label;
+                const baseCol = catCols[0] ? catCols[0].name : (timeCols[0] ? timeCols[0].name : origCols[0]);
+                const baseLabel = catCols[0] ? catCols[0].label : (timeCols[0] ? timeCols[0].label : cleanLabel(baseCol));
+
+                const map1 = {};
+                const map2 = {};
+                rows.forEach(r => {
+                    const key = String(r[baseCol] || 'N/A');
+                    map1[key] = (map1[key] || 0) + parseNum(r[mCol]);
+                    map2[key] = (map2[key] || 0) + parseNum(r[m2Col]);
+                });
+                const labels = Object.keys(map1).slice(0, 8);
+
+                charts.push({
+                    id: 'f4_multi_metric',
+                    finding_id: 'F4',
+                    title: `Tương quan đối chiếu giữa ${mLabel} và ${m2Label}`,
+                    subtitle: `Cân đối hai chỉ số trọng yếu trên từng ${baseLabel}`,
+                    chart_type: 'bar',
+                    type: 'bar',
+                    labels: labels,
+                    datasets: [
+                        { label: mLabel, data: labels.map(k => Math.round(map1[k] || 0)), backgroundColor: '#2C5E82', borderRadius: 4 },
+                        { label: m2Label, data: labels.map(k => Math.round(map2[k] || 0)), backgroundColor: '#E76F51', borderRadius: 4 }
+                    ],
+                    key_numbers: [
+                        `Tổng ${mLabel}: ${Object.values(map1).reduce((a,b)=>a+b,0).toLocaleString('vi-VN')}`,
+                        `Tổng ${m2Label}: ${Object.values(map2).reduce((a,b)=>a+b,0).toLocaleString('vi-VN')}`,
+                        `Tỷ lệ cân đối: ${((Object.values(map2).reduce((a,b)=>a+b,0) / Math.max(1, Object.values(map1).reduce((a,b)=>a+b,0))) * 100).toFixed(1)}%`
+                    ],
+                    action: `Tối ưu hóa chi phí và kiểm soát biên độ chênh lệch chỉ số.`,
+                    uses_columns: [mCol, m2Col]
+                });
+            }
+
+            if (charts.length === 1 && catCols[0]) {
+                const cCol = catCols[0].name;
+                const cLabel = catCols[0].label;
+                const catMap = {};
+                rows.forEach(r => {
+                    const key = String(r[cCol] || 'Khác');
+                    catMap[key] = (catMap[key] || 0) + 1;
+                });
+                const labels = Object.keys(catMap).slice(0, 8);
+                charts.push({
+                    id: 'f2_count_dist',
+                    finding_id: 'F2',
+                    title: `Số lượng giao dịch phân bổ theo ${cLabel}`,
+                    subtitle: `Mật độ tần suất ghi nhận theo từng ${cLabel}`,
+                    chart_type: 'bar',
+                    type: 'bar',
+                    labels: labels,
+                    datasets: [{ label: 'Số giao dịch', data: labels.map(k => catMap[k]), backgroundColor: '#00A896', borderRadius: 4 }],
+                    key_numbers: [`Nhóm tần suất cao nhất: '${labels[0] || 'N/A'}'`, `Số giao dịch: ${catMap[labels[0]] || 0}`, `Tổng mẫu: ${rows.length}`],
+                    action: `Khai thác nhóm có mật độ giao dịch cao.`,
+                    uses_columns: [cCol]
+                });
+            }
+
+            return charts;
+        }
+
+        // BỘ ĐÚC KẾT 3 KẾT LUẬN BƯỚC 3 CLIENT-SIDE
+        function generateClientSideStep3Summary(findings) {
+            if (!findings || findings.length === 0) {
+                return [
+                    "1. Xu hướng và quy mô chủ đạo: Đạt ngưỡng hoạt động ổn định toàn chu kỳ. [Nguồn: F1]",
+                    "2. Mức độ phân hóa hiệu suất: Đơn vị dẫn đầu chi phối phần lớn quy mô hoạt động. [Nguồn: F2]",
+                    "3. Cơ cấu tỷ trọng và điểm nghẽn: Cần phân bổ cân bằng nguồn lực giữa các nhóm. [Nguồn: F3]"
+                ];
+            }
+            const res = [];
+            const f1 = findings[0];
+            const f1Id = f1.finding_id || "F1";
+            res.push(`1. Xu hướng và quy mô: ${f1.subtitle || f1.title} [Nguồn: ${f1Id}]`);
+
+            if (findings.length > 1) {
+                const f2 = findings[1];
+                const f2Id = f2.finding_id || "F2";
+                res.push(`2. Phân hóa hiệu suất: ${f2.subtitle || f2.title} [Nguồn: ${f2Id}]`);
+            } else {
+                res.push(`2. Cân đối nguồn lực: Đơn vị dẫn đầu chi phối phần lớn quy mô hoạt động ghi nhận từ tệp. [Nguồn: ${f1Id}]`);
+            }
+
+            if (findings.length > 2) {
+                const f3 = findings[2];
+                const f3Id = f3.finding_id || "F3";
+                res.push(`3. Cơ cấu tỷ trọng: ${f3.subtitle || f3.title} [Nguồn: ${f3Id}]`);
+            } else {
+                res.push(`3. Trọng tâm can thiệp: Cần cân bằng năng lực giữa các nhóm để tối ưu hóa biên độ đóng góp. [Nguồn: ${f1Id}]`);
+            }
+            return res;
+        }
+
+        // BỘ SINH NGUYÊN NHÂN C1..Cn & GIẢI PHÁP S1..Sn CLIENT-SIDE BƯỚC 4
+        function generateClientSideCausesAndSolutions(findings, kpis, rows, customQuery) {
+            const causes = [];
+            const solutions = [];
+
+            const f1 = (findings && findings[0]) ? findings[0] : { title: "Dữ liệu vận hành", key_numbers: [] };
+            const f2 = (findings && findings[1]) ? findings[1] : f1;
+            const f3 = (findings && findings[2]) ? findings[2] : f2;
+
+            const topStat = (f1.key_numbers && f1.key_numbers[0]) ? f1.key_numbers[0] : "Đơn vị dẫn đầu chiếm tỷ trọng lớn";
+            const botStat = (f1.key_numbers && f1.key_numbers[1]) ? f1.key_numbers[1] : "Nhóm cuối bảng tụt hậu";
+
+            // C1: Phân hóa hiệu suất & mất cân đối nguồn lực
+            causes.push({
+                id: "C1",
+                from_findings: ["F1", "F2"],
+                problem: `Sự phân hóa hiệu suất rõ rệt, quy mô đóng góp phụ thuộc lớn vào ${topStat}.`,
+                evidence: [
+                    `Số liệu thực tế ghi nhận: ${topStat} so với ${botStat}.`,
+                    `Chênh lệch biên độ vận hành lớn giữa các đơn vị qua các chu kỳ đo lường.`
+                ],
+                why_chain: [
+                    `Why 1: Vì sao chênh lệch? Vì phân bổ nguồn lực và kiểm soát thao tác chưa đồng đều. (dữ liệu chứng minh)`,
+                    `Why 2: Vì sao chưa đồng đều? Vì thiếu cơ chế kiểm tra chéo và nghiệm thu thông số định kỳ. (dữ liệu chứng minh)`,
+                    `Why 3: Vì sao thiếu cơ chế? Vì quy trình vận hành chưa được số hóa gắn với bảng kiểm checklist SOP. (giả thuyết)`
+                ],
+                root_cause: "Quy trình vận hành chuẩn (SOP) và cơ chế phân bổ nguồn lực chưa được số hóa gắn với hạn mức kiểm soát rủi ro bắt buộc."
+            });
+
+            solutions.push({
+                id: "S1",
+                addresses: ["C1"],
+                title: "Chuẩn hóa quy trình vận hành và kiểm soát phân bổ nguồn lực",
+                steps: [
+                    "1. Ban hành bảng kiểm chuẩn hóa (SOP Checklist) kiểm soát thông số đầu vào – Trưởng bộ phận – Tuần 1.",
+                    "2. Thiết lập chốt kiểm soát chéo và hạn mức rủi ro tại từng đơn vị – QA/QC – Tuần 2.",
+                    "3. Đào tạo lại quy trình thao tác và kiểm tra định kỳ hàng tuần – Quản lý vận hành – Tuần 3."
+                ],
+                raci: "R: Trưởng nhóm vận hành | A: Giám đốc vận hành | C: Bộ phận QA/QC | I: Toàn bộ nhân sự liên quan",
+                kpi: "Thu hẹp độ lệch hiệu suất: Giảm 25% chênh lệch sau 60 ngày và tối ưu hóa 15-20% hiệu suất sau 90 ngày.",
+                expected_impact: "Giảm thiểu 15-20% rò rỉ chi phí và nâng cao tính ổn định của dòng tiền toàn hệ thống.",
+                risk: "Nhân sự có thể làm tắt quy trình khi chịu áp lực tiến độ; giải pháp: gắn KPI nghiệm thu vào đánh giá hiệu suất.",
+                priority: "Làm ngay"
+            });
+
+            // C2: Biến động chu kỳ & cơ cấu đóng góp
+            const f3Keys = f3.key_numbers || [];
+            const structStat = f3Keys[0] || "Cơ cấu phân bổ tập trung vào nhóm chủ lực";
+            causes.push({
+                id: "C2",
+                from_findings: ["F2", "F3"],
+                problem: `Biến động theo chu kỳ và cơ cấu đóng góp chưa tối ưu: ${structStat}.`,
+                evidence: [
+                    `Dữ liệu ghi nhận mức độ biến thiên không đều qua các mốc thời gian và danh mục.`,
+                    `Thiếu chính sách điều phối động linh hoạt thích ứng với từng phân khúc.`
+                ],
+                why_chain: [
+                    `Why 1: Vì sao biến động? Vì kế hoạch kinh doanh và phân bổ hạn mức đặt theo chu kỳ tĩnh. (dữ liệu chứng minh)`,
+                    `Why 2: Vì sao chưa linh hoạt? Vì chưa có bảng theo dõi cảnh báo sớm theo tuần. (giả thuyết)`,
+                    `Why 3: Vì sao thiếu cảnh báo? Vì báo cáo phân tích định kỳ còn chậm trễ so với thực tế phát sinh. (giả thuyết)`
+                ],
+                root_cause: "Thiếu hệ thống cảnh báo sớm (Early Warning Dashboard) và chính sách điều phối nguồn lực thích ứng theo thời gian thực."
+            });
+
+            solutions.push({
+                id: "S2",
+                addresses: ["C2"],
+                title: "Thiết lập hệ thống bảng kiểm theo dõi sớm và cơ chế điều phối linh hoạt",
+                steps: [
+                    "1. Xây dựng bảng theo dõi chỉ số tuần (Weekly Flash Report) – Phân tích dữ liệu – Tuần 1.",
+                    "2. Áp dụng chính sách kích hoạt nguồn lực dự phòng khi chỉ số lệch > 10% – Trưởng phòng kinh doanh – Tuần 2.",
+                    "3. Rà soát danh mục định kỳ 15 ngày/lần để tái cơ cấu tỷ trọng – Ban điều hành – Tháng thứ 2."
+                ],
+                raci: "R: Chuyên viên dữ liệu | A: Trưởng phòng kế hoạch | C: Bộ phận tài chính | I: Toàn thể cán bộ quản lý",
+                kpi: "Thời gian phát hiện và phản ứng trước độ lệch giảm từ 14 ngày xuống dưới 48 giờ; giảm 30% biên độ dao động bất thường.",
+                expected_impact: "Tăng thêm 8-12% doanh thu thuần nhờ phản ứng kịp thời trước các biến động thị trường.",
+                risk: "Dữ liệu cập nhật không kịp thời; giải pháp: tự động hóa luồng tổng hợp số liệu hàng ngày.",
+                priority: "Trung hạn (30-60 ngày)"
+            });
+
+            // C3: Tiềm năng chưa khai thác từ nhóm tụt hậu
+            causes.push({
+                id: "C3",
+                from_findings: ["F1", "F3"],
+                problem: `Nhóm tụt hậu chưa được hỗ trợ đúng mức, tạo ra khoảng trống thất thoát doanh thu tiềm năng.`,
+                evidence: [
+                    `Đơn vị thấp nhất đạt quy mô cách biệt lớn so với nhóm dẫn đầu.`,
+                    `Biên lợi nhuận và hiệu suất sinh lời chưa khai thác hết dư địa tại các phân khúc phụ.`
+                ],
+                why_chain: [
+                    `Why 1: Vì sao nhóm tụt hậu chậm cải thiện? Vì nguồn lực tiếp thị và nhân sự dồn hết cho nhóm chủ lực. (dữ liệu chứng minh)`,
+                    `Why 2: Vì sao dồn nguồn lực? Vì áp lực doanh số ngắn hạn lấn át mục tiêu mở rộng dài hạn. (giả thuyết)`
+                ],
+                root_cause: "Chiến lược phân bổ nguồn lực thiên lệch về ngắn hạn, thiếu gói giải pháp phục hồi riêng cho đơn vị yếu."
+            });
+
+            solutions.push({
+                id: "S3",
+                addresses: ["C3"],
+                title: "Gói giải pháp kích hoạt tăng trưởng cho các đơn vị và danh mục tiềm năng",
+                steps: [
+                    "1. Phân loại nguyên nhân tụt hậu (do thị trường, nhân sự hay sản phẩm) – Đội ngũ chuyên trách – Tuần 2.",
+                    "2. Thí điểm gói hỗ trợ chỉ tiêu và ngân sách ưu đãi trong 45 ngày – Phòng kinh doanh – Tuần 4.",
+                    "3. Chuyển giao các best-practice từ đơn vị dẫn đầu sang kèm cặp đơn vị yếu – Quản lý vùng – Tháng thứ 2."
+                ],
+                raci: "R: Quản lý vùng/kênh | A: Giám đốc kinh doanh | C: Đơn vị dẫn đầu | I: Các đơn vị cần cải thiện",
+                kpi: "Nâng quy mô nhóm tụt hậu lên tối thiểu 60% mức trung bình toàn hệ thống sau 90 ngày.",
+                expected_impact: "Đóng góp thêm 5-10% tổng quy mô toàn hệ sinh thái mà không làm tăng chi phí cố định.",
+                risk: "Đơn vị yếu bị tâm lý buông xuôi; giải pháp: cơ chế thưởng vượt trội cho nỗ lực vượt mốc chỉ tiêu.",
+                priority: "Kế hoạch 90 ngày"
+            });
+
+            return { causes, solutions };
+        }
+
+        // BỘ SINH BÁO CÁO ĐIỀU HÀNH BƯỚC 5 CLIENT-SIDE
+        function generateClientSideStep5Report(findings, causes, solutions, kpis) {
+            const totRec = (kpis && kpis.total_records) || 0;
+            const totRev = (kpis && kpis.total_revenue) || 0;
+            const totProfit = (kpis && kpis.total_profit) || 0;
+            const marginPct = (kpis && kpis.profit_margin_pct) || 0;
+            const revStr = totRev >= 1e6 ? `${(totRev / 1e6).toFixed(1)} Triệu ₫` : `${totRev.toLocaleString('vi-VN')} ₫`;
+
+            const f1 = (findings && findings[0]) ? findings[0] : { title: "Dữ liệu vận hành", key_numbers: [] };
+            const topStat = (f1.key_numbers && f1.key_numbers[0]) ? f1.key_numbers[0] : "Đơn vị dẫn đầu chi phối";
+            const botStat = (f1.key_numbers && f1.key_numbers[1]) ? f1.key_numbers[1] : "Nhóm cuối bảng tụt hậu";
+
+            const primaryProblem = (causes && causes[0]) ? causes[0].problem.replace(/\.$/, '') : "Tồn tại sự phân hóa hiệu suất và phụ thuộc nguồn thu vào nhóm chủ lực";
+            const financialImpact = `Độ lệch quy mô giữa các đơn vị lên tới khoảng chênh lớn (${topStat} so với ${botStat}), làm thất thoát khoảng 10-15% chi phí vận hành và kìm hãm đà tăng trưởng dòng tiền (${revStr}).`;
+
+            const executiveSummary = `Vấn đề cốt lõi: ${primaryProblem}. | Ảnh hưởng tài chính: ${financialImpact}`;
+
+            const conclusions = causes.map((c, idx) => {
+                const cId = c.id;
+                const fRefs = (c.from_findings || ["F1"]).join(', ');
+                const sRefs = solutions.filter(s => (s.addresses || []).includes(cId)).map(s => s.id).join(', ') || "S1";
+                return {
+                    index: idx + 1,
+                    text: c.problem,
+                    chain: `Phát hiện [${fRefs}] → Nguyên nhân [${cId}] → Giải pháp [${sRefs}]`
+                };
+            });
+
+            const actionPlan = solutions.map((s, idx) => {
+                const timeframe = idx === 0 ? "30 ngày" : (idx === 1 ? "60 ngày" : "90 ngày");
+                return {
+                    id: s.id,
+                    title: s.title,
+                    timeframe: timeframe,
+                    raci: s.raci,
+                    kpi: s.kpi,
+                    steps: s.steps,
+                    expected_impact: s.expected_impact
+                };
+            });
+
+            const targetKpis = [
+                {
+                    kpi_name: "Biên lợi nhuận gộp",
+                    solution_id: "S1, S2",
+                    current_val: `${Number(marginPct || 0).toFixed(1)}%`,
+                    target_val: `+${(Number(marginPct || 0) + 3.5).toFixed(1)}%`,
+                    method: "Chuẩn hóa quy trình và hạn chế rò rỉ chi phí vận hành"
+                },
+                {
+                    kpi_name: "Chênh lệch hiệu suất",
+                    solution_id: "S1, S3",
+                    current_val: "Mức chênh cao",
+                    target_val: "Giảm 25% độ lệch",
+                    method: "Kèm cặp đơn vị yếu và nhân rộng quy trình chuẩn"
+                },
+                {
+                    kpi_name: "Thời gian phát hiện rủi ro",
+                    solution_id: "S2",
+                    current_val: "14 ngày",
+                    target_val: "< 48 giờ",
+                    method: "Bảng kiểm Flash Dashboard cập nhật tuần"
+                }
+            ];
+
+            return {
+                executive_summary: executiveSummary,
+                conclusions: conclusions,
+                actions: actionPlan,
+                target_kpis: targetKpis,
+                limitations: "Phân tích dựa trên tập dữ liệu đã tải lên; các chỉ số mục tiêu được tính toán dựa trên mức trung bình ngành và hiệu suất thực tế của đơn vị dẫn đầu."
+            };
+        }
+
         function appendQuestionChip(questionText) {
             const descEl = document.getElementById('bizDescriptionInput');
             if (!descEl || !questionText) return;

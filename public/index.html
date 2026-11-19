@@ -4261,24 +4261,6 @@
                 clientKpis
             );
 
-            const clientRichCharts = generateClientSideRichCharts(cleanedRows, userQ, nameEl ? nameEl.value : '');
-            const clientStep3Summary = generateClientSideStep3Summary(clientRichCharts);
-            const clientKpis = {
-                total_records: cleanedRows.length,
-                total_revenue: totalRev,
-                total_profit: totalProfit,
-                profit_margin_pct: marginPct,
-                total_units: totalUnits,
-                aov: aov
-            };
-            const clientCausesAndSolutions = generateClientSideCausesAndSolutions(clientRichCharts, clientKpis, cleanedRows, userQ.join('\n'));
-            const clientStep5Report = generateClientSideStep5Report(
-                clientRichCharts,
-                clientCausesAndSolutions.causes,
-                clientCausesAndSolutions.solutions,
-                clientKpis
-            );
-
             if (clientSmart) {
                 renderStep1SmartSuggestions(clientSmart, true);
             }
@@ -4288,11 +4270,6 @@
                 table_name: tableName,
                 quality_raw: { total_rows: totalRows, total_cols: totalCols },
                 smart_suggestions: clientSmart,
-                rich_charts: clientRichCharts,
-                step3_summary: clientStep3Summary,
-                structured_causes: clientCausesAndSolutions.causes,
-                structured_solutions: clientCausesAndSolutions.solutions,
-                step5_report: clientStep5Report,
                 rich_charts: clientRichCharts,
                 step3_summary: clientStep3Summary,
                 structured_causes: clientCausesAndSolutions.causes,
