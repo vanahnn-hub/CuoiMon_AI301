@@ -3003,22 +3003,8 @@
             try {
                 let rawRows = [];
                 try {
-                    let workbook;
                     if (ext === 'csv') {
-                        const text = await file.text();
-                        const firstLine = (text.split(/\r?\n/)[0] || '');
-                        if (firstLine.includes(';') || firstLine.includes('\t') || !firstLine.includes(',')) {
-                            throw new Error('Use custom delimiter parser for non-comma CSV');
-                        }
-                        workbook = XLSX.read(text, { type: 'string' });
-                    } else {
-                        const buffer = await file.arrayBuffer();
-                        workbook = XLSX.read(buffer, { type: 'array' });
-                    }
-                    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-                    rawRows = XLSX.utils.sheet_to_json(firstSheet, { defval: '' });
-                } catch (_) {
-                    try {
+                        // Đọc CSV trực tiếp bằng text parser để bảo toàn 100% định dạng nguyên bản
                         const text = await file.text();
                         const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
                         if (lines.length > 1) {
@@ -3051,7 +3037,15 @@
                                 return obj;
                             });
                         }
-                    } catch (e2) {}
+                    } else {
+                        // File Excel XLSX/XLS: Dùng SheetJS với raw: false để giữ text nguyên bản
+                        const buffer = await file.arrayBuffer();
+                        const workbook = XLSX.read(buffer, { type: 'array', cellDates: false });
+                        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                        rawRows = XLSX.utils.sheet_to_json(firstSheet, { defval: '', raw: false });
+                    }
+                } catch (readErr) {
+                    console.warn('Lỗi bộ đọc chính, chuyển sang fallback dự phòng:', readErr);
                 }
 
                 if (!rawRows || rawRows.length === 0) {
@@ -3198,12 +3192,29 @@
                 .replace(/^_|_$/g, '') || 'col';
         }
 
+        function formatMaybeExcelDate(val, colName) {
+            if (typeof val === 'number' && val > 25000 && val < 65000) {
+                const colLower = String(colName || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
+                if (/(thang|ngay|date|month|year|ky|time|period)/.test(colLower)) {
+                    const date = new Date(Math.round((val - 25569) * 86400 * 1000));
+                    const y = date.getUTCFullYear();
+                    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+                    const d = String(date.getUTCDate()).padStart(2, '0');
+                    if (colLower.includes('thang') || colLower.includes('month')) {
+                        return `${y}-${m}`;
+                    }
+                    return `${y}-${m}-${d}`;
+                }
+            }
+            return val;
+        }
+
         function buildClientSidePipelineFromRows(rawRows, fileName) {
-            const origCols = Object.keys(rawRows[0]);
+            const origCols = Object.keys(rawRows[0] || {});
             const totalRows = rawRows.length;
             const totalCols = origCols.length;
 
-            // Chuẩn hóa tên cột snake_case & đếm ô trống / trùng lặp
+            // Bảo toàn 100% tên cột gốc và giá trị gốc (không đổi sang snake_case)
             let missingCount = 0;
             const seenSet = new Set();
             let dupCount = 0;
@@ -3212,13 +3223,13 @@
             rawRows.forEach(row => {
                 const newRow = {};
                 origCols.forEach(col => {
-                    const sk = toSnakeCase(col);
                     let v = row[col];
                     if (v === '' || v === null || v === undefined) {
                         missingCount++;
                         v = 0;
                     }
-                    newRow[sk] = v;
+                    v = formatMaybeExcelDate(v, col);
+                    newRow[col] = v;
                 });
                 const sig = JSON.stringify(newRow);
                 if (seenSet.has(sig)) {
@@ -3230,11 +3241,12 @@
             });
 
             const cleanCols = Object.keys(cleanedRows[0] || {});
+            const toNorm = str => String(str || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
             // Tự động dò cột doanh thu, lợi nhuận, số lượng, danh mục
-            const revCol = cleanCols.find(c => /(rev|doanh_thu|tien|amount|sales|total|gia_tri)/.test(c)) || cleanCols.find(c => typeof cleanedRows[0][c] === 'number');
-            const profCol = cleanCols.find(c => /(prof|loi_nhuan|lai|margin)/.test(c));
-            const qtyCol = cleanCols.find(c => /(qty|so_luong|unit|quantity)/.test(c));
-            const catCol = cleanCols.find(c => /(cat|danh_muc|loai|group|segment|channel|kenh|san_pham|product)/.test(c)) || cleanCols[0];
+            const revCol = cleanCols.find(c => /(rev|doanh_thu|doanh thu|tien|amount|sales|total|gia_tri|gia tri)/.test(toNorm(c))) || cleanCols.find(c => typeof cleanedRows[0][c] === 'number');
+            const profCol = cleanCols.find(c => /(prof|loi_nhuan|loi nhuan|lai|margin)/.test(toNorm(c)));
+            const qtyCol = cleanCols.find(c => /(qty|so_luong|so luong|unit|quantity)/.test(toNorm(c)));
+            const catCol = cleanCols.find(c => /(cat|danh_muc|danh muc|loai|group|segment|channel|kenh|san_pham|san pham|product|khu_vuc|khu vuc)/.test(toNorm(c))) || cleanCols[0];
 
             let totalRev = 0;
             let totalProfit = 0;
