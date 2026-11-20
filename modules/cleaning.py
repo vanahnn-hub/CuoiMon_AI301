@@ -1273,7 +1273,7 @@ def clean_and_integrate_data(
                 
                 # Bổ sung cột phân loại trạng thái lợi nhuận nếu chưa có
                 if 'Trạng_thái_lợi_nhuận' not in cleaned_df.columns:
-                    cleaned_df['Trạng_thái_lợi_nhuận'] = np.where(cleaned_df[p_col] < 0, 'Cảnh báo lỗ', 'Có lãi')
+                    cleaned_df['Trạng_thái_lợi_nhuận'] = np.where(cleaned_df[p_col] < 0, 'Lợi nhuận âm', 'Có lãi')
                 
                 # KIỂM TRA: Nếu tệp ĐÃ CÓ cột biên lợi nhuận rồi thì TUYỆT ĐỐI KHÔNG sinh thêm cột mới!
                 existing_margin_cols = [c for c in cleaned_df.columns if _is_margin_col(c)]
@@ -1285,9 +1285,9 @@ def clean_and_integrate_data(
                             (cleaned_df[p_col] / cleaned_df[r_col] * 100).round(1),
                             0.0
                         )
-                        cleaning_log.append(f"Phát hiện {cnt} dòng kinh doanh lỗ tại cột '{p_col}' (Tổng lỗ: {loss_val:,.0f} ₫). Hệ thống đã tự động gắn nhãn kiểm toán 'Cảnh báo lỗ' và bổ sung cột 'Biên_lợi_nhuận_%' để khoanh vùng và tối ưu.")
+                        cleaning_log.append(f"Phát hiện {cnt} dòng kinh doanh lỗ tại cột '{p_col}' (Tổng lỗ: {loss_val:,.0f} ₫). Hệ thống ghi nhận trạng thái 'Lợi nhuận âm' (số liệu hợp lệ theo công thức) và bổ sung cột 'Biên_lợi_nhuận_%' để khoanh vùng và tối ưu.")
                     else:
-                        cleaning_log.append(f"Phát hiện {cnt} dòng kinh doanh lỗ tại cột '{p_col}' (Tổng lỗ: {loss_val:,.0f} ₫). Hệ thống đã tự động gắn nhãn kiểm toán 'Cảnh báo lỗ'.")
+                        cleaning_log.append(f"Phát hiện {cnt} dòng kinh doanh lỗ tại cột '{p_col}' (Tổng lỗ: {loss_val:,.0f} ₫). Hệ thống ghi nhận trạng thái 'Lợi nhuận âm' (số liệu hợp lệ theo công thức).")
                 else:
                     cleaning_log.append(f"Phát hiện {cnt} dòng kinh doanh lỗ tại cột '{p_col}' (Tổng lỗ: {loss_val:,.0f} ₫). Đã gắn nhãn kiểm toán và sử dụng cột biên lợi nhuận sẵn có '{existing_margin_cols[0]}'.")
 

@@ -944,132 +944,182 @@ def build_rich_charts_suite(
     # Tự động nhận diện mọi thực thể, chỉ số và chiều phân tích mà người dùng nhắc tới trong bảng dữ liệu
     # -------------------------------------------------------------------------------------------------
     if is_custom and q_norm:
-        # 1. Quét tìm các cột thực tế được người dùng nhắc tới trong DataFrame
-        matched_dims = []
-        matched_metrics = []
-        matched_time = None
-        
+        # =================================================================================================
+        # UNIVERSAL ADAPTIVE QUERY ENGINE (ÁP DỤNG TỔNG QUÁT CHO MỌI NGÀNH NGHỀ & MỌI BỘ DỮ LIỆU)
+        # =================================================================================================
         all_cols = df.columns.tolist()
         num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         non_num_cols = [c for c in all_cols if c not in num_cols]
         
-        scored_metrics = []
-        scored_dims = []
-        
-        for c in all_cols:
-            c_norm = norm(c)
-            score = 0
-            # 1. Khớp chính xác tên cột
-            if c_norm in q_norm:
-                score = 100
-            else:
-                # 2. Khớp theo từ khóa đặc thù
-                if any(k in c_norm for k in ['thue', 'rent', 'mat bang']) and any(w in q_norm for w in ['thue', 'rent', 'mat bang']): score = 90
-                elif any(k in c_norm for k in ['nhan su', 'luong', 'salary', 'nhan vien']) and any(w in q_norm for w in ['nhan su', 'luong', 'salary', 'nhan vien']): score = 90
-                elif any(k in c_norm for k in ['dien tich', 'area', 'm2']) and any(w in q_norm for w in ['dien tich', 'area', 'm2']): score = 90
-                elif any(k in c_norm for k in ['loi nhuan', 'profit', 'lai']) and any(w in q_norm for w in ['loi nhuan', 'profit', 'lai', 'lo', 'bien lai']): score = 85
-                elif any(k in c_norm for k in ['doanh thu', 'revenue', 'sales']) and any(w in q_norm for w in ['doanh thu', 'revenue', 'ban hang', 'tien hang']): score = 80
-                elif any(k in c_norm for k in ['gia von', 'cogs', 'chi phi', 'cost']) and any(w in q_norm for w in ['gia von', 'cogs', 'chi phi', 'cost']): score = 75
-                
-                # Chiều phân loại
-                elif any(k in c_norm for k in ['khu vuc', 'region', 'mien']) and any(w in q_norm for w in ['khu vuc', 'region', 'mien', 'vung', 'tinh']): score = 90
-                elif any(k in c_norm for k in ['kenh', 'channel', 'platform']) and any(w in q_norm for w in ['kenh', 'channel', 'platform', 'san', 'shopee', 'tiktok']): score = 90
-                elif any(k in c_norm for k in ['cua hang', 'store', 'shop', 'chi nhanh']) and any(w in q_norm for w in ['cua hang', 'store', 'shop', 'chi nhanh', 'diem ban']): score = 85
-                elif any(k in c_norm for k in ['san pham', 'mat hang', 'item', 'product']) and any(w in q_norm for w in ['san pham', 'mat hang', 'hang hoa', 'product']): score = 85
-                else:
-                    words = [w for w in c_norm.split() if len(w) > 1 and w not in ['vnd', 'usd', 'id', 'ma', 'so']]
-                    if any(w in q_norm for w in words): score = 50
-            
-            if score > 0:
-                if c in num_cols:
-                    scored_metrics.append((score, c))
-                elif c == time_c or any(k in c_norm for k in ['thang', 'ngay', 'date', 'month', 'year']):
-                    matched_time = c
-                else:
-                    scored_dims.append((score, c))
-                    
-        scored_metrics.sort(key=lambda x: x[0], reverse=True)
-        scored_dims.sort(key=lambda x: x[0], reverse=True)
-        
-        matched_metrics = [c for _, c in scored_metrics]
-        matched_dims = [c for _, c in scored_dims]
-                    
-        # Nếu chưa tìm thấy dimension, bổ sung dim1 mặc định
-        target_dim = matched_dims[0] if matched_dims else (dim1 or (non_num_cols[0] if non_num_cols else None))
-        sub_dim = matched_dims[1] if len(matched_dims) > 1 else (dim2 if dim2 != target_dim else None)
-        target_metric = matched_metrics[0] if matched_metrics else (metric1 or (num_cols[0] if num_cols else None))
-        sub_metric = matched_metrics[1] if len(matched_metrics) > 1 else (metric2 if metric2 != target_metric else None)
-        target_time = matched_time or time_c
-        
-        # 2. Xây dựng biểu đồ bám sát 100% câu hỏi người dùng
-        user_wants_time = any(w in q_norm for w in ['thoi gian', 'ngay', 'thang', 'nam', 'chu ky', 'xu huong', 'trend', 'date', 'month', 'giai doan'])
-        
-        # Nếu người dùng muốn phân tích chuỗi thời gian cụ thể
-        if user_wants_time and target_time and target_metric:
-            c_time = make_time_line_chart(target_time, target_metric, sub_metric, chart_id="chart_custom_time_trend")
-            if c_time:
-                c_time["title"] = f"1. Diễn Biến {clean_vietnamese_column_title(target_metric)} Theo Chu Kỳ {clean_vietnamese_column_title(target_time)}"
-                c_time["subtitle"] = f"Phân tích chuỗi thời gian bám sát yêu cầu: {custom_query}"
-                add_chart(c_time)
+        # Tạo từ điển mẫu giá trị thực tế cho từng cột phân loại để so khớp ngay cả khi người dùng chỉ nêu giá trị (ví dụ: "Ca 1, Ca 2", "Shopee, TikTok")
+        col_unique_samples = {}
+        for c in non_num_cols:
+            col_unique_samples[c] = [norm(v) for v in df[c].dropna().unique()[:15]]
 
-        # Biểu đồ 1: Biểu đồ chính giải quyết trực diện theo target_dim
-        if target_dim and target_metric:
-            force_loss = any(w in q_norm for w in ['lo', 'am', 'thua lo', 'canh bao'])
-            c1 = make_dimension_bar_chart(target_dim, target_metric, chart_id="chart_custom_primary_bar", force_loss=force_loss)
-            if c1:
-                c1["title"] = f"1. So Sánh {clean_vietnamese_column_title(target_metric)} Theo {clean_vietnamese_column_title(target_dim)}"
-                c1["subtitle"] = f"Phân tích trực diện theo yêu cầu: {custom_query}"
-                c1["agent_reason"] = f"Agent tự động nhận diện yêu cầu '{custom_query}' và phân tích trực diện chỉ số '{target_metric}' phân bổ theo từng '{target_dim}'."
-                add_chart(c1)
-                
-        # Biểu đồ 2: Đối chiếu metric thứ 2 & 3 theo target_dim (Số lỗi, Tỷ lệ lỗi, Chi phí, v.v.)
-        if target_dim:
-            other_metrics = [m for m in num_cols if m != target_metric]
-            metric_2 = sub_metric or (other_metrics[0] if other_metrics else None)
-            metric_3 = other_metrics[1] if len(other_metrics) > 1 and other_metrics[1] != metric_2 else None
-            
-            if metric_2 and metric_3:
-                c2 = make_cost_structure_chart(target_dim, [metric_2, metric_3], chart_id="chart_custom_two_metrics")
-                if c2:
-                    c2["title"] = f"2. Đối Chiếu {clean_vietnamese_column_title(metric_2)} vs {clean_vietnamese_column_title(metric_3)} Theo {clean_vietnamese_column_title(target_dim)}"
-                    c2["subtitle"] = f"Làm rõ mối quan hệ định lượng giải quyết yêu cầu: {custom_query}"
-                    c2["agent_reason"] = f"Agent đối chiếu chuyên sâu các chỉ số trọng yếu '{metric_2}' và '{metric_3}' phân bổ theo từng '{target_dim}'."
-                    add_chart(c2)
-            elif metric_2:
-                c2 = make_dimension_bar_chart(target_dim, metric_2, chart_id="chart_custom_two_metrics")
-                if c2:
-                    c2["title"] = f"2. Phân Bổ {clean_vietnamese_column_title(metric_2)} Theo Từng {clean_vietnamese_column_title(target_dim)}"
-                    c2["subtitle"] = f"Đo lường mức độ biến động của {metric_2} theo yêu cầu: {custom_query}"
-                    add_chart(c2)
-                
-        # Biểu đồ 3: Chiếu chéo ma trận phối hợp giữa target_dim và sub_dim HOẶC Metric vận hành thứ 3
-        if target_dim:
-            if sub_dim and (target_metric or sub_metric):
-                m = target_metric or sub_metric
-                c3 = make_grouped_bar_matrix_chart(target_dim, sub_dim, m, chart_id="chart_custom_cross_dim")
-                if c3:
-                    c3["title"] = f"3. Phân Bổ {clean_vietnamese_column_title(m)} Của Từng {clean_vietnamese_column_title(sub_dim)} Trong Mỗi {clean_vietnamese_column_title(target_dim)}"
-                    c3["subtitle"] = f"Bóc tách sự phối hợp và độ lệch hiệu suất giữa các {sub_dim} theo từng {target_dim}"
-                    c3["agent_reason"] = f"Agent phân tích đa chiều chuyên sâu giữa '{target_dim}' và '{sub_dim}'."
-                    add_chart(c3)
+        raw_items = []
+        for line in str(custom_query or '').splitlines():
+            line = line.strip()
+            if not line: continue
+            sub_parts = [p.strip() for p in re.split(r'[\?\;]+', line) if p.strip()]
+            if sub_parts:
+                raw_items.extend(sub_parts)
             else:
-                other_metrics = [m for m in num_cols if m not in [target_metric, sub_metric]]
-                if other_metrics:
-                    m_extra = other_metrics[0]
-                    c3 = make_dimension_bar_chart(target_dim, m_extra, chart_id="chart_custom_extra_metric_bar")
-                    if c3:
-                        c3["title"] = f"3. Đo Lường {clean_vietnamese_column_title(m_extra)} Theo Từng {clean_vietnamese_column_title(target_dim)}"
-                        c3["subtitle"] = f"Đánh giá toàn diện chỉ số vận hành {m_extra}"
-                        add_chart(c3)
+                raw_items.append(line)
                 
-        # Biểu đồ 4: Cơ cấu tỷ trọng theo target_dim (Donut Chart)
-        if target_dim and target_metric and "chart_custom_donut_share" not in created_ids:
-            c4 = make_dimension_donut_chart(target_dim, target_metric, chart_id="chart_custom_donut_share")
-            if c4:
-                c4["title"] = f"4. Cơ Cấu Tỷ Trọng {clean_vietnamese_column_title(target_metric)} Giữa Các {clean_vietnamese_column_title(target_dim)}"
-                c4["subtitle"] = f"Mức độ phân bổ và đóng góp của từng {target_dim}"
-                c4["agent_reason"] = f"Agent tính toán cơ cấu tỷ trọng nguồn lực/lỗi phân bổ giữa các '{target_dim}'."
-                add_chart(c4)
+        if not raw_items:
+            raw_items = [custom_query]
+
+        def universal_find_metric(q_str):
+            qn = norm(q_str)
+            scored = []
+            for c in num_cols:
+                cn = norm(c)
+                score = 0
+                if cn in qn: score += 100
+                words = [w for w in cn.split() if len(w) > 1 and w not in ['vnd', 'usd', 'so', 'ma', 'luong']]
+                if any(w in qn for w in words): score += 40
+                
+                # Ngữ nghĩa đa ngành (Sản xuất, Bán lẻ, Tài chính, Vận hành)
+                if any(k in cn for k in ['loi', 'phe pham', 'defect', 'hong', 'sai lech']) and any(w in qn for w in ['loi', 'phe pham', 'defect', 'hong', 'sai lech', 'ty le loi']): score += 70
+                if any(k in cn for k in ['san luong', 'san xuat', 'output', 'nang suat', 'so luong']) and any(w in qn for w in ['san luong', 'san xuat', 'output', 'nang suat', 'so luong']): score += 60
+                if any(k in cn for k in ['loi nhuan', 'profit', 'lai', 'lo', 'bien lai']) and any(w in qn for w in ['loi nhuan', 'profit', 'lai', 'lo', 'bien lai']): score += 70
+                if any(k in cn for k in ['doanh thu', 'revenue', 'sales', 'tien hang']) and any(w in qn for w in ['doanh thu', 'revenue', 'sales', 'tien hang', 'ban hang']): score += 60
+                if any(k in cn for k in ['chi phi', 'cost', 'gia von', 'cogs', 'thue', 'luong']) and any(w in qn for w in ['chi phi', 'cost', 'gia von', 'cogs', 'thue', 'luong']): score += 60
+                if any(k in cn for k in ['thoi gian', 'dung may', 'downtime', 'time']) and any(w in qn for w in ['thoi gian', 'dung may', 'downtime']): score += 60
+                if score > 0:
+                    scored.append((score, c))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            return scored[0][1] if scored else (metric1 or (num_cols[0] if num_cols else None))
+
+        def universal_find_dim(q_str):
+            qn = norm(q_str)
+            scored = []
+            for c in non_num_cols:
+                cn = norm(c)
+                score = 0
+                if cn in qn: score += 100
+                words = [w for w in cn.split() if len(w) > 1 and w not in ['ma', 'id', 'so']]
+                if any(w in qn for w in words): score += 40
+                
+                # So khớp theo giá trị thực tế trong cột
+                for sample in col_unique_samples.get(c, []):
+                    if sample and len(sample) > 1 and sample in qn:
+                        score += 80
+                        break
+                        
+                # Ngữ nghĩa ngành nghề
+                if any(k in cn for k in ['ca', 'shift', 'kip']) and any(w in qn for w in ['ca', 'shift', 'kip']): score += 60
+                if any(k in cn for k in ['chuyen', 'day chuyen', 'line', 'may', 'thiet bi']) and any(w in qn for w in ['chuyen', 'day chuyen', 'line', 'may', 'thiet bi']): score += 60
+                if any(k in cn for k in ['khu vuc', 'mien', 'region', 'vung', 'dia ban']) and any(w in qn for w in ['khu vuc', 'mien', 'region', 'vung', 'dia ban']): score += 60
+                if any(k in cn for k in ['cua hang', 'store', 'shop', 'chi nhanh', 'diem ban']) and any(w in qn for w in ['cua hang', 'store', 'shop', 'chi nhanh', 'diem ban']): score += 60
+                if any(k in cn for k in ['kenh', 'channel', 'platform', 'san', 'website']) and any(w in qn for w in ['kenh', 'channel', 'platform', 'san', 'website']): score += 60
+                if any(k in cn for k in ['san pham', 'mat hang', 'item', 'product', 'danh muc']) and any(w in qn for w in ['san pham', 'mat hang', 'item', 'product', 'danh muc']): score += 60
+                if any(k in cn for k in ['khach hang', 'customer', 'doi tac']) and any(w in qn for w in ['khach hang', 'customer', 'doi tac']): score += 60
+                if any(k in cn for k in ['phong ban', 'bo phan', 'nhan vien', 'team']) and any(w in qn for w in ['phong ban', 'bo phan', 'nhan vien', 'team']): score += 60
+                if score > 0:
+                    scored.append((score, c))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            return scored[0][1] if scored else (dim1 or (non_num_cols[0] if non_num_cols else None))
+
+        def universal_find_time(q_str):
+            qn = norm(q_str)
+            if time_c:
+                tc_norm = norm(time_c)
+                if tc_norm in qn: return time_c
+            if any(w in qn for w in ['thang', 'ngay', 'nam', 'chu ky', 'xu huong', 'trend', 'date', 'month', 'tang giam', 'bien dong', 'giai doan']):
+                return time_c
+            return None
+
+        # DUYỆT TỪNG YÊU CẦU CỦA NGƯỜI DÙNG ĐỂ SINH BIỂU ĐỒ CHUYÊN BIỆT
+        used_signatures = set()
+        
+        for q_idx, q_item in enumerate(raw_items, 1):
+            qn = norm(q_item)
+            q_metric = universal_find_metric(q_item)
+            q_dim = universal_find_dim(q_item)
+            q_time = universal_find_time(q_item)
+            
+            # 1. Ý đồ: Chuỗi thời gian / Xu hướng / Biến động tăng giảm
+            if q_time and any(w in qn for w in ['thang', 'ngay', 'date', 'month', 'chu ky', 'xu huong', 'trend', 'tang giam', 'bien dong']):
+                sub_m = prof_c if (prof_c and q_metric != prof_c) else (num_cols[1] if len(num_cols) > 1 and num_cols[1] != q_metric else None)
+                sig = f"time_{q_metric}"
+                if sig in used_signatures and sub_m:
+                    q_metric = sub_m
+                    sub_m = None
+                    sig = f"time_{q_metric}_2"
+                used_signatures.add(sig)
+                
+                c = make_time_line_chart(q_time, q_metric, sub_m, chart_id=f"chart_q_time_{q_idx}")
+                if c:
+                    c['title'] = f"Diễn Biến {clean_vietnamese_column_title(q_metric)} Theo Chu Kỳ {clean_vietnamese_column_title(q_time)}"
+                    c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
+                    c['agent_reason'] = f"Agent trực quan hóa chu kỳ biến động của {q_metric} qua từng {q_time} để giải quyết yêu cầu về xu hướng."
+                    add_chart(c)
+                    continue
+
+            # 2. Ý đồ: Cơ cấu tỷ trọng / Chiếm phần lớn / Phân bổ tổng thể
+            if any(w in qn for w in ['chiem phan lon', 'phan lon', 'ty trong', 'co cau', 'tong', 'dong gop']):
+                target_d = q_dim or reg_c or dim1
+                sig = f"donut_{target_d}_{q_metric}"
+                used_signatures.add(sig)
+                
+                c = make_dimension_donut_chart(target_d, q_metric, chart_id=f"chart_q_donut_{q_idx}")
+                if c:
+                    c['title'] = f"Cơ Cấu Tỷ Trọng {clean_vietnamese_column_title(q_metric)} Theo {clean_vietnamese_column_title(target_d)}"
+                    c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
+                    c['agent_reason'] = f"Agent tính toán cơ cấu tỷ trọng % đóng góp của từng {target_d} để xác định chính xác nhóm chiếm phần lớn."
+                    add_chart(c)
+                    continue
+
+            # 3. Ý đồ: Phân tích Lợi nhuận / Lãi / Lỗ hoặc các chỉ số phân hóa âm dương
+            if any(w in qn for w in ['loi nhuan', 'lai', 'lo', 'thua lo', 'am']):
+                target_d = q_dim or store_c or dim1
+                target_m = prof_c or q_metric
+                sig = f"bar_loss_{target_d}_{target_m}"
+                used_signatures.add(sig)
+                
+                c = make_dimension_bar_chart(target_d, target_m, chart_id=f"chart_q_profit_{q_idx}", force_loss=True)
+                if c:
+                    c['title'] = f"Phân Tích {clean_vietnamese_column_title(target_m)} Giữa Các {clean_vietnamese_column_title(target_d)}"
+                    c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
+                    c['agent_reason'] = f"Agent đánh giá biên độ và mức độ phân hóa {target_m} giữa từng {target_d} theo dữ liệu thực tế."
+                    add_chart(c)
+                    continue
+
+            # 4. Ý đồ: So sánh / Đơn vị nào cao nhất / Thấp nhất / Giữa các...
+            target_d = q_dim or store_c or reg_c or dim1
+            sig = f"bar_{target_d}_{q_metric}"
+            
+            # Nếu đã có biểu đồ Bar đơn cho cặp này rồi, biến tấu sang biểu đồ ma trận phối hợp hoặc đối chiếu 2 chỉ số
+            if sig in used_signatures:
+                other_d = [c for c in non_num_cols if c != target_d]
+                if other_d:
+                    sec_d = other_d[0]
+                    c = make_grouped_bar_matrix_chart(target_d, sec_d, q_metric, chart_id=f"chart_q_matrix_{q_idx}")
+                    if c:
+                        c['title'] = f"Phân Bổ {clean_vietnamese_column_title(q_metric)} Chi Tiết Của Từng {clean_vietnamese_column_title(sec_d)} Trong Mỗi {clean_vietnamese_column_title(target_d)}"
+                        c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
+                        c['agent_reason'] = f"Agent phân tích đa chiều chuyên sâu bóc tách cơ cấu {sec_d} trong từng {target_d}."
+                        add_chart(c)
+                        used_signatures.add(f"matrix_{target_d}_{sec_d}")
+                        continue
+                elif len(num_cols) > 1:
+                    sec_m = [c for c in num_cols if c != q_metric][0]
+                    c = make_cost_structure_chart(target_d, [q_metric, sec_m], chart_id=f"chart_q_comp_{q_idx}")
+                    if c:
+                        c['title'] = f"Đối Chiếu {clean_vietnamese_column_title(q_metric)} vs {clean_vietnamese_column_title(sec_m)} Theo {clean_vietnamese_column_title(target_d)}"
+                        c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
+                        add_chart(c)
+                        used_signatures.add(f"comp_{target_d}")
+                        continue
+
+            used_signatures.add(sig)
+            c = make_dimension_bar_chart(target_d, q_metric, chart_id=f"chart_q_bar_{q_idx}")
+            if c:
+                c['title'] = f"So Sánh {clean_vietnamese_column_title(q_metric)} Theo {clean_vietnamese_column_title(target_d)}"
+                c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
+                c['agent_reason'] = f"Agent so sánh quy mô {q_metric} giữa các {target_d} nhằm làm rõ đơn vị đạt mức cao nhất và thấp nhất."
+                add_chart(c)
 
     # -------------------------------------------------------------------------------------------------
     # KỊCH BẢN 2: THEO ĐỊNH HƯỚNG ĐƯỢC CHỌN (HOẶC BỔ SUNG NẾU CHƯA ĐỦ 3-4 BIỂU ĐỒ)
@@ -1124,7 +1174,7 @@ def build_rich_charts_suite(
                 c1 = make_dimension_bar_chart(dim1, metric1, chart_id="chart_dir_chan_dim1")
                 if c1: add_chart(c1)
             if dim2 and metric1:
-                c2 = make_dimension_bar_chart(dim2, metric1, chart_id="chart_dir_chan_dim2")
+                c2 = make_dimension_donut_chart(dim2, metric1, chart_id="chart_dir_chan_dim2")
                 if c2: add_chart(c2)
             if dim1 and dim2 and metric1:
                 c3 = make_grouped_bar_matrix_chart(dim1, dim2, metric1, chart_id="chart_dir_chan_matrix")
@@ -1175,8 +1225,11 @@ def build_rich_charts_suite(
             c = make_dimension_bar_chart(dim1, prof_c, chart_id="chart_fallback_prof", force_loss=True)
             if c: add_chart(c)
 
-    # Giới hạn chặt chẽ chỉ giữ từ 3 đến tối đa 4 biểu đồ sắc bén nhất
-    final_charts = charts[:4]
+    # Nếu người dùng có yêu cầu riêng: Giữ TOÀN BỘ biểu đồ trả lời đủ tất cả câu hỏi!
+    if is_custom and len(charts) > 0:
+        final_charts = charts
+    else:
+        final_charts = charts[:4]
     
     # Đánh số lại thứ tự từ 1 đến N và loại bỏ sạch emoji
     for idx, c in enumerate(final_charts, 1):

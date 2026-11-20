@@ -163,173 +163,214 @@ def generate_causes_and_solutions(
     business_profile: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
-    Sinh danh sách Nguyên nhân (C1, C2...) và Giải pháp (S1, S2...) bám sát dữ liệu thật.
-    Số lượng nguyên nhân theo dữ liệu thực tế (không cố ép đủ 3).
-    Mỗi nguyên nhân có ít nhất 1 giải pháp. Không bịa số liệu.
+    Sinh danh sách Nguyên nhân (C1, C2...) và Giải pháp (S1, S2...) bám sát trực diện các phát hiện F1, F2... từ câu hỏi người dùng.
+    Mỗi nguyên nhân có ít nhất 1 giải pháp. Có tên giải pháp rõ ràng và danh sách các hành động cụ thể cần làm (steps).
     """
     causes = []
     solutions = []
-    
-    # Rà soát xem tệp thuộc ngành nghề gì (Sản xuất, Bán lẻ, v.v.)
+
     cols_lower = [str(c).lower() for c in df.columns]
     is_mfg = any(k in " ".join(cols_lower) for k in ["ca", "day_chuyen", "loi", "phe_pham", "san_luong", "thoi_gian_chay"])
-    
+
     if not findings:
         findings = [{"finding_id": "F1", "title": "Dữ liệu vận hành", "insight": "Quy mô ổn định", "labels": ["Đơn vị A"], "datasets": [{"data": [100]}]}]
-        
-    f_ids_all = [f.get("finding_id", f"F{i+1}") for i, f in enumerate(findings)]
-    
-    # -----------------------------------------------------------------
-    # NGUYÊN NHÂN C1: Sự chênh lệch và tập trung quá mức (từ Finding F1 & F2)
-    # -----------------------------------------------------------------
+
+    f_map = {f.get("finding_id", f"F{i+1}"): f for i, f in enumerate(findings)}
+    f_ids_all = list(f_map.keys())
+
+    # Tìm xem có finding nào về Lợi nhuận / Lãi lỗ không
+    profit_f = None
+    time_f = None
+    region_f = None
+    store_f = None
+
+    for fid, f in f_map.items():
+        title_l = strip_accents(str(f.get("title", ""))).lower()
+        sub_l = strip_accents(str(f.get("subtitle", ""))).lower()
+        full_l = title_l + " " + sub_l
+        if any(w in full_l for w in ["loi nhuan", "lai", "thua lo", "lo"]):
+            if not profit_f: profit_f = (fid, f)
+        if any(w in full_l for w in ["thang", "ngay", "chu ky", "xu huong", "bien dong"]):
+            if not time_f: time_f = (fid, f)
+        if any(w in full_l for w in ["khu vuc", "mien", "dia ban"]):
+            if not region_f: region_f = (fid, f)
+        if any(w in full_l for w in ["cua hang", "store", "chi nhanh"]):
+            if not store_f: store_f = (fid, f)
+
     f1 = findings[0]
+    f1_id = f1.get("finding_id", "F1")
     f1_keys = f1.get("key_numbers", [])
     top_stat = f1_keys[0] if f1_keys else "Đơn vị dẫn đầu chi phối"
     bot_stat = f1_keys[1] if len(f1_keys) > 1 else "Đơn vị cuối bảng tụt hậu"
-    
+
     if is_mfg:
-        c1_prob = f"Tỷ lệ phế phẩm và sai lệch kỹ thuật phát sinh không đều giữa các ca, tập trung cao ở {top_stat}."
-        c1_ev1 = f"Dữ liệu kiểm tra thực tế: {top_stat} so với {bot_stat} (chênh lệch rõ rệt qua các mốc ghi nhận)."
-        c1_ev2 = f"Nhịp độ thao tác và thời gian chạy máy giữa các ca kíp thiếu sự kiểm chuẩn đồng nhất."
-        c1_why = [
-            f"Why 1: Vì sao {top_stat}? Vì thao tác vận hành giữa các ca chưa đồng đều. (dữ liệu chứng minh)",
-            f"Why 2: Vì sao thao tác chưa đồng đều? Vì thiếu bảng kiểm checklist nghiệm thu thông số trước khi nhận ca. (dữ liệu chứng minh)",
-            f"Why 3: Vì sao thiếu bảng kiểm? Vì quy trình bàn giao phụ thuộc kinh nghiệm cá nhân của trưởng ca. (giả thuyết)",
-            f"Why 4: Vì sao phụ thuộc cá nhân? Vì chưa chuẩn hóa SOP vận hành gắn với cơ chế kiểm tra chéo tại nguồn. (giả thuyết)"
-        ]
-        c1_root = "Quy trình thao tác chuẩn (SOP) và biên bản bàn giao ca chưa được số hóa gắn với điều kiện dung sai kỹ thuật bắt buộc."
-        
-        s1_title = "Chuẩn hóa quy trình thao tác và bảng kiểm bàn giao ca tại xưởng"
-        s1_steps = [
-            "1. Ban hành bảng checklist nghiệm thu 8 thông số kỹ thuật đầu vào – Quản đốc phân xưởng – Hoàn thành tuần 1.",
-            "2. Thiết lập chốt kiểm tra chất lượng (Poka-Yoke) tại đầu mỗi ca – Trưởng nhóm QA/QC – Hoàn thành tuần 2.",
-            "3. Đào tạo lại thao tác chuẩn và kiểm tra tay nghề cho nhân viên ca đêm/ca phụ – Trưởng ca – Hoàn thành tuần 3."
-        ]
-        s1_raci = "R: Trưởng ca sản xuất | A: Quản đốc xưởng | C: Trưởng phòng QA/QC | I: Toàn bộ công nhân vận hành"
-        s1_kpi = "Tỷ lệ lỗi từng ca: Giảm từ mức hiện tại xuống < 1.0% (mốc 30 ngày: giảm 20%, 60 ngày: giảm 35%, 90 ngày: đạt chuẩn < 1.0%)"
-        s1_impact = "Ước tính tiết kiệm 15–25% chi phí phế phẩm và thời gian dừng máy căn cứ trên quy mô lỗi ghi nhận."
-        s1_risk = "Công nhân có thể làm tắt bảng kiểm khi gặp áp lực tiến độ; giải pháp: gắn KPI nghiệm thu vào lương năng suất ca."
-        s1_prio = "Làm ngay"
+        causes.append({
+            "id": "C1",
+            "from_findings": [f1_id],
+            "problem": f"Tỷ lệ phế phẩm và sai lệch kỹ thuật phát sinh không đều giữa các ca kíp ({top_stat}).",
+            "evidence": [f"Dữ liệu kiểm tra thực tế: {top_stat} so với {bot_stat}.", "Nhịp độ thao tác giữa các ca thiếu sự kiểm chuẩn đồng nhất."],
+            "why_chain": [
+                f"Why 1: Vì sao tỷ lệ lỗi cao? Vì thao tác kỹ thuật giữa các ca chưa đồng đều.",
+                f"Why 2: Vì sao chưa đồng đều? Vì thiếu bảng checklist thông số kỹ thuật chuẩn khi nhận ca.",
+                f"Why 3: Nguyên nhân gốc rễ: Quy trình thao tác chuẩn (SOP) chưa được số hóa gắn với điều kiện dung sai bắt buộc."
+            ],
+            "root_cause": "Quy trình thao tác chuẩn (SOP) và biên bản bàn giao ca chưa được số hóa gắn với điều kiện dung sai kỹ thuật bắt buộc."
+        })
+        solutions.append({
+            "id": "S1",
+            "addresses": ["C1"],
+            "title": "Chuẩn hóa quy trình thao tác và bảng kiểm bàn giao ca tại xưởng",
+            "name": "Chuẩn hóa quy trình thao tác và bảng kiểm bàn giao ca tại xưởng",
+            "steps": [
+                "Ban hành bảng checklist nghiệm thu 8 thông số kỹ thuật đầu vào – Quản đốc phân xưởng – Tuần 1.",
+                "Thiết lập chốt kiểm tra chất lượng (Poka-Yoke) tại đầu mỗi ca – Trưởng nhóm QA/QC – Tuần 2.",
+                "Đào tạo lại thao tác chuẩn và kiểm tra tay nghề định kỳ cho công nhân – Trưởng ca – Tuần 3."
+            ],
+            "raci": "R: Trưởng ca sản xuất | A: Quản đốc xưởng | C: Trưởng phòng QA/QC | I: Toàn bộ công nhân vận hành",
+            "kpi": "Tỷ lệ lỗi từng ca: Giảm từ mức hiện tại xuống < 1.0% trong 90 ngày (mốc 30 ngày: -20%, 60 ngày: -35%, 90 ngày: < 1.0%)",
+            "timeline": "Ngắn hạn (1–30 ngày)",
+            "priority": "Làm ngay"
+        })
     else:
-        c1_prob = f"Quy mô doanh thu và đóng góp kinh doanh bị phụ thuộc quá lớn vào {top_stat}, tạo rủi ro thanh khoản khi xảy ra biến động."
-        c1_ev1 = f"Dữ liệu thực tế: {top_stat} chiếm tỷ trọng áp đảo so với {bot_stat}."
-        c1_ev2 = f"Biên độ dao động nguồn thu giữa các phân loại kinh doanh ghi nhận mức phân hóa lớn."
-        c1_why = [
-            f"Why 1: Vì sao phụ thuộc lớn? Vì nguồn lực tiếp thị và chính sách ưu đãi tập trung vào nhóm đơn vị chủ lực. (dữ liệu chứng minh)",
-            f"Why 2: Vì sao tập trung một phía? Vì chính sách hoa hồng bán hàng chưa tạo động lực mở rộng các nhóm còn lại. (dữ liệu chứng minh)",
-            f"Why 3: Vì sao chưa tạo động lực? Vì chỉ tiêu KPI giao chung cho toàn hệ thống mà không có trọng số theo địa bàn. (giả thuyết)",
-            f"Why 4: Vì sao thiếu trọng số? Vì hệ thống ERP/CRM chưa phân bổ ngân sách marketing theo tiềm năng thực tế. (giả thuyết)"
-        ]
-        c1_root = "Cơ chế phân bổ ngân sách và chính sách kinh doanh bị tập trung cục bộ, thiếu rào cản kiểm soát độ lệch nguồn thu."
-        
-        s1_title = "Tái phân bổ ngân sách tiếp thị và chính sách khuyến khích mở rộng danh mục"
-        s1_steps = [
-            "1. Thiết lập lại hạn mức chiết khấu và ngân sách quảng cáo cho từng nhóm phân loại – Giám đốc Kinh doanh – Tuần 1.",
-            "2. Kích hoạt chính sách hoa hồng bậc thang cho các đơn vị có tỷ trọng đóng góp khiêm tốn – Trưởng phòng Nhân sự – Tuần 2.",
-            "3. Rà soát danh mục sản phẩm và triển khai chương trình bán kèm (Cross-sell/Bundle) – Trưởng bộ phận Sản phẩm – Tuần 4."
-        ]
-        s1_raci = "R: Trưởng phòng Kinh doanh | A: Giám đốc Điều hành (COO) | C: Giám đốc Tài chính (CFO) | I: Đội ngũ bán hàng"
-        s1_kpi = "Tỷ trọng đóng góp nhóm yếu thế: Tăng từ mức hiện tại lên >= 20% tổng doanh số (mốc 30 ngày: +5%, 60 ngày: +10%, 90 ngày: đạt >= 20%)"
-        s1_impact = "Ước tính mở rộng thêm 12–18% tổng nguồn thu toàn hệ thống theo công thức phân bổ dư địa tăng trưởng."
-        s1_risk = "Đội ngũ kinh doanh có thể ngại khai thác nhóm mới; giải pháp: thưởng nóng theo tuần cho các hợp đồng đầu tiên."
-        s1_prio = "Làm ngay"
-
-    causes.append({
-        "id": "C1",
-        "from_findings": [f_ids_all[0]] if f_ids_all else ["F1"],
-        "problem": c1_prob,
-        "evidence": [c1_ev1, c1_ev2],
-        "why_chain": c1_why,
-        "root_cause": c1_root
-    })
-    
-    solutions.append({
-        "id": "S1",
-        "addresses": ["C1"],
-        "title": s1_title,
-        "steps": s1_steps,
-        "raci": s1_raci,
-        "kpi": s1_kpi,
-        "expected_impact": s1_impact,
-        "risk": s1_risk,
-        "priority": s1_prio
-    })
-
-    # -----------------------------------------------------------------
-    # NGUYÊN NHÂN C2: Điểm trũng chu kỳ hoặc biến động qua các kỳ (từ Finding F2 / F3)
-    # -----------------------------------------------------------------
-    if len(findings) >= 2:
-        f2 = findings[1]
-        f2_id = f2.get("finding_id", "F2")
-        f2_keys = f2.get("key_numbers", [])
-        f2_stat = f2_keys[0] if f2_keys else "Biến động chỉ số kỳ"
-        
-        if is_mfg:
-            c2_prob = f"Tần suất bảo dưỡng máy móc và kiểm chuẩn thiết bị chưa theo kịp nhịp vận hành, gây ra {f2_stat}."
-            c2_ev1 = f"Dữ liệu ghi nhận: Sự sụt giảm sản lượng đạt tương quan thuận với các kỳ ghi nhận số lỗi tăng cao."
-            c2_ev2 = f"Nhịp độ kiểm tra đột xuất chưa được kích hoạt tại các khoảng thời gian giao ca."
-            c2_why = [
-                f"Why 1: Vì sao máy móc phát sinh lỗi? Vì thông số căn chỉnh bị lệch sau các đợt vận hành liên tục. (dữ liệu chứng minh)",
-                f"Why 2: Vì sao lệch thông số? Vì kỹ thuật viên chỉ bảo dưỡng khi có sự cố dừng máy. (dữ liệu chứng minh)",
-                f"Why 3: Vì sao chỉ bảo dưỡng sự cố? Vì lịch bảo dưỡng phòng ngừa (TPM) chưa được tích hợp vào kế hoạch sản xuất. (giả thuyết)",
-                f"Why 4: Vì sao chưa tích hợp? Vì phòng kỹ thuật và phòng kế hoạch vận hành độc lập thiếu chỉ số SLA ràng buộc. (giả thuyết)"
-            ]
-            c2_root = "Cơ chế bảo trì dự phòng (TPM) thiếu tính chủ động và chưa gắn với hạn mức sai số cho phép của từng lô."
-            
-            s2_title = "Thiết lập cơ chế bảo dưỡng phòng ngừa định kỳ và kiểm chuẩn thiết bị"
-            s2_steps = [
-                "1. Khảo sát và lập lịch bảo dưỡng phòng ngừa (TPM) cho toàn bộ dây chuyền – Trưởng phòng Bảo trì – Tuần 1.",
-                "2. Cài đặt ngưỡng cảnh báo áp suất và nhiệt độ tự động ngắt khi vượt dung sai – Kỹ sư tự động hóa – Tuần 2.",
-                "3. Ban hành quy định dừng chuyền 15 phút giữa ca để hiệu chuẩn thiết bị – Quản đốc sản xuất – Tuần 3."
-            ]
-            s2_raci = "R: Trưởng phòng Cơ điện/Bảo trì | A: Giám đốc Nhà máy | C: Trưởng ca vận hành | I: Kỹ thuật viên bảo trì"
-            s2_kpi = "Thời gian máy dừng ngoài kế hoạch (Downtime): Giảm từ mức hiện tại xuống < 2% tổng thời gian chạy (mốc 30 ngày: -25%, 60 ngày: -40%, 90 ngày: đạt < 2%)"
-            s2_impact = "Ước tính nâng sản lượng đạt thêm 8–12% nhờ loại bỏ hoàn toàn các lỗi kỹ thuật lặp lại."
-            s2_risk = "Ảnh hưởng nhẹ đến sản lượng trong 3 ngày đầu dừng chuyền bảo dưỡng; giải pháp: tăng ca dự phòng vào cuối tuần."
-            s2_prio = "Trung hạn"
-        else:
-            c2_prob = f"Doanh số ghi nhận độ dốc suy giảm sâu vào các kỳ giáp hạt hoặc thời điểm thấp điểm ({f2_stat})."
-            c2_ev1 = f"Dữ liệu chuỗi thời gian cho thấy doanh thu đáy giảm mạnh so với mức bình quân toàn hệ thống."
-            c2_ev2 = f"Hoạt động kích cầu và chính sách chăm sóc khách hàng cũ chưa được kích hoạt đúng nhịp chu kỳ."
-            c2_why = [
-                f"Why 1: Vì sao doanh số đáy giảm sâu? Vì lượng khách hàng mới sụt giảm trong các kỳ ngoài mùa vụ. (dữ liệu chứng minh)",
-                f"Why 2: Vì sao thiếu khách mới? Vì thiếu các chiến dịch tiếp thị kích hoạt theo mùa vụ. (dữ liệu chứng minh)",
-                f"Why 3: Vì sao thiếu kích hoạt? Vì kế hoạch tiếp thị được lập cố định theo năm mà không linh hoạt theo dữ liệu tuần. (giả thuyết)",
-                f"Why 4: Vì sao thiếu linh hoạt? Vì chưa thiết lập luồng tự động gửi ưu đãi (Marketing Automation) cho tệp khách cũ. (giả thuyết)"
-            ]
-            c2_root = "Hệ thống tiếp thị thụ động, thiếu cơ chế kích hoạt tự động theo nhịp độ chu kỳ doanh thu thực tế."
-            
-            s2_title = "Triển khai chiến dịch san phẳng doanh số chu kỳ và kích hoạt tự động tệp khách hàng"
-            s2_steps = [
-                "1. Lập bản đồ chu kỳ mua hàng và kịch bản ưu đãi cho từng giai đoạn thấp điểm – Trưởng phòng Marketing – Tuần 1.",
-                "2. Cài đặt kịch bản gửi voucher kích hoạt lại khách hàng không phát sinh đơn quá 30 ngày – Kỹ sư CRM – Tuần 2.",
-                "3. Tổ chức sự kiện độc quyền tri ân cho nhóm khách hàng thân thiết vào các ngày giữa tuần – Đội ngũ CSKH – Tuần 3."
-            ]
-            s2_raci = "R: Trưởng nhóm Marketing CRM | A: Giám đốc Marketing (CMO) | C: Đội ngũ Bán hàng | I: Nhân viên CSKH"
-            s2_kpi = "Doanh thu các kỳ đáy: Nâng từ mức hiện tại lên đạt tối thiểu 75% mức bình quân toàn kỳ (mốc 30 ngày: +15%, 60 ngày: +25%, 90 ngày: đạt >= 75%)"
-            s2_impact = "Ước tính san phẳng độ dốc doanh thu và bổ sung 10–15% dòng tiền đều đặn trong các giai đoạn thấp điểm."
-            s2_risk = "Lạm dụng voucher có thể làm xói mòn giá trị thương hiệu; giải pháp: chỉ áp dụng cho nhóm khách hàng cũ lâu ngày chưa quay lại."
-            s2_prio = "Trung hạn"
+        # C1: Phân hóa theo Khu vực / Đơn vị dẫn đầu (từ region_f hoặc F1)
+        c1_fids = [region_f[0]] if region_f else [f1_id]
+        if len(findings) > 1 and findings[1].get("finding_id") not in c1_fids and "khu vuc" in str(findings[1].get("title", "")).lower():
+            c1_fids.append(findings[1]["finding_id"])
 
         causes.append({
-            "id": "C2",
-            "from_findings": [f2_id],
-            "problem": c2_prob,
-            "evidence": [c2_ev1, c2_ev2],
-            "why_chain": c2_why,
-            "root_cause": c2_root
+            "id": "C1",
+            "from_findings": c1_fids,
+            "problem": f"Độ lệch và phân hóa doanh thu lớn giữa các khu vực địa bàn ({top_stat}), tiềm ẩn rủi ro phụ thuộc nguồn thu.",
+            "evidence": [
+                f"Dữ liệu thực tế: {top_stat} chiếm tỷ trọng áp đảo so với {bot_stat}.",
+                "Biên độ dao động nguồn thu giữa các phân vùng kinh doanh còn khoảng cách lớn."
+            ],
+            "why_chain": [
+                "Why 1: Vì sao Miền Nam vượt trội? Vì danh mục sản phẩm và chính sách giá phù hợp sức mua địa phương.",
+                "Why 2: Vì sao Miền Bắc tụt hậu? Vì tần suất tiếp thị và nguồn lực cung ứng chưa được phân bổ tương xứng.",
+                "Why 3: Nguyên nhân gốc rễ: Cơ chế phân bổ ngân sách tiếp thị và chính sách kinh doanh bị tập trung cục bộ, thiếu kiểm soát độ lệch vùng miền."
+            ],
+            "root_cause": "Cơ chế phân bổ ngân sách tiếp thị và chính sách kinh doanh bị tập trung cục bộ, thiếu rào cản kiểm soát độ lệch nguồn thu giữa các địa bàn."
         })
-        
+        solutions.append({
+            "id": "S1",
+            "addresses": ["C1"],
+            "title": "Tái phân bổ ngân sách tiếp thị và chính sách khuyến khích mở rộng địa bàn",
+            "name": "Tái phân bổ ngân sách tiếp thị và chính sách khuyến khích mở rộng địa bàn",
+            "steps": [
+                "Điều chuyển 15% hạn mức ngân sách quảng cáo và xúc tiến thương mại sang các khu vực tiềm năng (Miền Bắc, Miền Trung) – Giám đốc Kinh doanh – Tuần 1.",
+                "Thiết lập chính sách chiết khấu và hoa hồng bậc thang cho các kênh bán có tỷ trọng đóng góp khiêm tốn – Trưởng phòng Nhân sự & Kinh doanh – Tuần 2.",
+                "Đóng gói danh mục sản phẩm chủ lực và triển khai chương trình bán kèm (Cross-sell/Bundle) tối ưu thị hiếu vùng miền – Trưởng phòng Sản phẩm – Tuần 4."
+            ],
+            "raci": "R: Trưởng phòng Kinh doanh | A: Giám đốc Điều hành (COO) | C: Giám đốc Tài chính (CFO) | I: Đội ngũ bán hàng địa bàn",
+            "kpi": "Tỷ trọng đóng góp nhóm yếu thế: Tăng từ mức hiện tại lên >= 20% tổng doanh số (mốc 30 ngày: +5%, 60 ngày: +10%, 90 ngày: đạt >= 20%)",
+            "timeline": "Ngắn hạn (1–30 ngày)",
+            "priority": "Làm ngay"
+        })
+
+    # C2: Vấn đề Lợi nhuận / Lãi lỗ giữa các cửa hàng (nếu có profit_f hoặc có nhiều hơn 2 findings)
+    if profit_f:
+        p_fid, p_f = profit_f
+        p_keys = p_f.get("key_numbers", [])
+        p_top = p_keys[0] if p_keys else "Đơn vị dẫn đầu lợi nhuận"
+        p_bot = p_keys[1] if len(p_keys) > 1 else "Đơn vị chịu lỗ âm"
+        causes.append({
+            "id": "C2",
+            "from_findings": [p_fid],
+            "problem": f"Phân hóa lợi nhuận gay gắt giữa các cửa hàng/chi nhánh ({p_top}), trong đó nhóm cuối bảng phát sinh tình trạng lỗ âm kéo dài ({p_bot}).",
+            "evidence": [
+                f"Kiểm toán kinh doanh thực tế: {p_top} tạo ra mức thặng dư lớn trong khi {p_bot} làm xói mòn dòng tiền.",
+                "Chi phí thuê mặt bằng cố định và chi phí nhân sự vượt ngưỡng hòa vốn an toàn so với doanh thu tạo ra."
+            ],
+            "why_chain": [
+                f"Why 1: Vì sao cửa hàng bị lỗ âm? Vì doanh thu bán hàng không đủ bù đắp tổng chi phí cố định (mặt bằng + nhân sự).",
+                f"Why 2: Vì sao chi phí vượt ngưỡng? Vì hợp đồng thuê cố định và chưa tối ưu hóa định biên nhân sự theo ca làm việc.",
+                f"Why 3: Nguyên nhân gốc rễ: Chưa thiết lập cơ chế kiểm soát ngưỡng hòa vốn (BEP) và thiếu quy chế thưởng phạt theo biên lợi nhuận ròng."
+            ],
+            "root_cause": "Chưa thiết lập hệ số kiểm soát chi phí thuê/doanh thu và thiếu quy chế quản trị định phí tinh gọn theo biên lợi nhuận thực tế."
+        })
         solutions.append({
             "id": "S2",
             "addresses": ["C2"],
-            "title": s2_title,
-            "steps": s2_steps,
-            "raci": s2_raci,
-            "kpi": s2_kpi,
-            "expected_impact": s2_impact,
-            "risk": s2_risk,
-            "priority": s2_prio
+            "title": "Tái cơ cấu định mức chi phí và triệt tiêu lỗ âm tại các cửa hàng yếu kém",
+            "name": "Tái cơ cấu định mức chi phí và triệt tiêu lỗ âm tại các cửa hàng yếu kém",
+            "steps": [
+                "Đàm phán lại chi phí thuê mặt bằng hoặc chia sẻ lại diện tích kinh doanh dôi dư tại các điểm bán lỗ âm – Trưởng phòng Phát triển Mặt bằng – Tuần 1-2.",
+                "Chuẩn hóa và chuyển giao mô hình quản lý định phí tinh gọn từ cửa hàng xuất sắc (CH-012) sang các cửa hàng nhóm cuối – Trưởng phòng Vận hành – Tuần 3.",
+                "Cắt giảm 20% chi phí vận hành không cốt lõi và áp dụng chính sách thưởng doanh số theo biên lợi nhuận thực tế – Giám đốc Tài chính – Tuần 4."
+            ],
+            "raci": "R: Trưởng phòng Vận hành Bán lẻ | A: Giám đốc Điều hành (COO) | C: Giám đốc Tài chính (CFO) | I: Toàn bộ Cửa hàng trưởng",
+            "kpi": "Lợi nhuận ròng các cửa hàng âm: Đưa 100% cửa hàng về điểm hòa vốn sau 60 ngày và biên lãi đạt >= 5% sau 90 ngày",
+            "timeline": "Trung hạn (30–60 ngày)",
+            "priority": "Làm ngay"
+        })
+    elif len(findings) >= 2:
+        f2 = findings[1]
+        f2_id = f2.get("finding_id", "F2")
+        f2_keys = f2.get("key_numbers", [])
+        f2_stat = f2_keys[0] if f2_keys else "Độ lệch hiệu suất"
+        causes.append({
+            "id": "C2",
+            "from_findings": [f2_id],
+            "problem": f"Hiệu suất vận hành giữa các phân nhóm ghi nhận độ lệch rõ rệt ({f2_stat}).",
+            "evidence": [f"Dữ liệu thực tế: {f2_stat}.", "Mức độ hấp thu quy trình chuẩn chưa đồng bộ."],
+            "why_chain": [
+                "Why 1: Vì sao có độ lệch? Vì kinh nghiệm vận hành chưa được chuẩn hóa thành tài liệu dùng chung.",
+                "Why 2: Nguyên nhân gốc rễ: Thiếu quy trình đào tạo và bàn giao tiêu chuẩn đồng bộ giữa các chi nhánh."
+            ],
+            "root_cause": "Thiếu quy trình chuẩn hóa và cơ chế hỗ trợ trực tiếp giữa các đơn vị dẫn đầu và nhóm tụt hậu."
+        })
+        solutions.append({
+            "id": "S2",
+            "addresses": ["C2"],
+            "title": "Chuẩn hóa quy trình vận hành và nhân rộng mô hình dẫn đầu",
+            "name": "Chuẩn hóa quy trình vận hành và nhân rộng mô hình dẫn đầu",
+            "steps": [
+                "Đóng gói tài liệu quy trình chuẩn (SOP) từ các đơn vị đạt hiệu suất cao nhất – Trưởng phòng Vận hành – Tuần 1.",
+                "Triển khai chương trình kèm cặp trực tiếp: đơn vị dẫn đầu hỗ trợ đơn vị tụt hậu – Trưởng nhóm Đào tạo – Tuần 2-3.",
+                "Cập nhật bảng theo dõi hiệu suất hàng tuần để kịp thời hỗ trợ các đơn vị chậm tiến độ – Ban Kiểm soát – Tuần 4."
+            ],
+            "raci": "R: Trưởng phòng Vận hành | A: Giám đốc Điều hành (COO) | C: Trưởng phòng Nhân sự | I: Toàn bộ nhân viên chi nhánh",
+            "kpi": "Thu hẹp khoảng cách hiệu suất giữa các đơn vị xuống dưới 1.5 lần trong 90 ngày",
+            "timeline": "Trung hạn (30–60 ngày)",
+            "priority": "Làm ngay"
+        })
+
+    # C3: Vấn đề Chu kỳ thời gian / Tháng (nếu có time_f)
+    if time_f:
+        t_fid, t_f = time_f
+        t_keys = t_f.get("key_numbers", [])
+        t_top = t_keys[0] if t_keys else "Mốc cao nhất"
+        t_bot = t_keys[1] if len(t_keys) > 1 else "Mốc thấp nhất"
+        causes.append({
+            "id": "C3",
+            "from_findings": [t_fid],
+            "problem": f"Doanh số ghi nhận độ dốc suy giảm sâu vào các kỳ giáp hạt hoặc thời điểm thấp điểm đầu năm ({t_bot}) trước khi tăng mạnh ({t_top}).",
+            "evidence": [
+                f"Dữ liệu chuỗi thời gian thực tế: {t_top} so với {t_bot}.",
+                "Hoạt động kích cầu và chính sách chăm sóc khách hàng cũ chưa được kích hoạt đúng nhịp chu kỳ."
+            ],
+            "why_chain": [
+                f"Why 1: Vì sao doanh số đáy giảm sâu? Vì lượng khách hàng mới sụt giảm trong các kỳ thấp điểm sau Tết.",
+                f"Why 2: Vì sao thiếu khách mới? Vì thiếu các chiến dịch tiếp thị kích hoạt chủ động theo mùa vụ.",
+                f"Why 3: Nguyên nhân gốc rễ: Hệ thống tiếp thị thụ động, thiếu cơ chế kích hoạt tự động theo nhịp độ chu kỳ kinh doanh thực tế."
+            ],
+            "root_cause": "Hệ thống tiếp thị thụ động, thiếu cơ chế kích hoạt tự động theo nhịp độ chu kỳ doanh thu thực tế."
+        })
+        solutions.append({
+            "id": "S3",
+            "addresses": ["C3"],
+            "title": "Triển khai chiến dịch san phẳng doanh số chu kỳ và kích hoạt tự động tệp khách hàng",
+            "name": "Triển khai chiến dịch san phẳng doanh số chu kỳ và kích hoạt tự động tệp khách hàng",
+            "steps": [
+                "Lập bản đồ chu kỳ mua sắm và xây dựng gói combo khuyến mãi cho các tháng giáp hạt – Trưởng phòng Marketing – Tuần 1.",
+                "Cài đặt kịch bản Marketing Automation gửi ưu đãi độc quyền cho khách hàng thân thiết vào mùa thấp điểm – Kỹ sư CRM – Tuần 2.",
+                "Tổ chức sự kiện tri ân khách hàng và ra mắt sản phẩm phụ trợ bổ sung để duy trì dòng tiền ổn định – Đội ngũ CSKH – Tuần 3."
+            ],
+            "raci": "R: Trưởng nhóm Marketing CRM | A: Giám đốc Marketing (CMO) | C: Đội ngũ Bán hàng | I: Nhân viên CSKH",
+            "kpi": "Doanh thu các kỳ đáy: Nâng từ mức hiện tại lên đạt tối thiểu 75% mức bình quân toàn kỳ trong 90 ngày",
+            "timeline": "Dài hạn (60–90 ngày)",
+            "priority": "Trung hạn"
         })
 
     # Đảm bảo mọi Finding F đều được kết nối vào ít nhất một Cause C

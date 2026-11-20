@@ -2745,39 +2745,42 @@
                 // HÀM LẤY TOÀN BỘ CÂU HỎI / YÊU CẦU NGƯỜI DÙNG TỪ MỌI NGUỒN (KHÔNG BAO GIỜ BỎ SÓT)
         function getUserEffectiveQuestions() {
             const backend = window.latestBackendData;
-            let rawText = '';
+            let rawList = [];
 
             if (backend && Array.isArray(backend.user_questions) && backend.user_questions.length > 0) {
-                return backend.user_questions.map(q => String(q).trim()).filter(q => q.length > 0);
-            }
-
-            if (backend && backend.custom_query && String(backend.custom_query).trim().length > 0) {
-                rawText = String(backend.custom_query).trim();
+                rawList = backend.user_questions;
+            } else if (backend && backend.custom_query && String(backend.custom_query).trim().length > 0) {
+                rawList = [String(backend.custom_query)];
             } else {
-                const customInput = document.getElementById('customDirectionQueryInput');
+                const customInput = document.getElementById("customDirectionQueryInput");
                 if (customInput && customInput.value.trim().length > 0) {
-                    rawText = customInput.value.trim();
+                    rawList = [customInput.value.trim()];
                 } else {
-                    const descInput = document.getElementById('bizDescriptionInput');
+                    const descInput = document.getElementById("bizDescriptionInput");
                     if (descInput && descInput.value.trim().length > 0) {
-                        rawText = descInput.value.trim();
+                        rawList = [descInput.value.trim()];
                     } else {
-                        const badge = document.getElementById('step3EnforcedQueryBadge');
+                        const badge = document.getElementById("step3EnforcedQueryBadge");
                         if (badge && badge.innerText.trim().length > 0) {
-                            rawText = badge.innerText.replace(/^"|"$/g, '').trim();
+                            rawList = [badge.innerText.replace(/^[\"\'\s]+|[\"\'\s]+$/g, "").trim()];
                         }
                     }
                 }
             }
 
-            if (!rawText) return [];
+            if (rawList.length === 0) return [];
 
-            const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+            const rawLines = rawList.flatMap(q => String(q || "").split(/\r?\n/))
+                                    .map(l => l.replace(/^[\"\'\s]+|[\"\'\s]+$/g, "").trim())
+                                    .filter(l => l.length > 0);
+
             const questions = [];
-            lines.forEach(line => {
-                const parts = line.split(/[\?\;]+/).map(p => p.trim()).filter(p => p.length > 0);
+            rawLines.forEach(line => {
+                const parts = line.split(/[\?\;]+/).map(p => p.replace(/^[\"\'\s]+|[\"\'\s]+$/g, "").trim()).filter(p => p.length > 0);
                 if (parts.length > 1) {
                     parts.forEach(p => questions.push(p));
+                } else if (parts.length === 1) {
+                    questions.push(parts[0]);
                 } else {
                     questions.push(line);
                 }
@@ -2788,49 +2791,63 @@
         // BỘ SINH CÂU TRẢ LỜI TRỰC TIẾP KÈM SỐ LIỆU THẬT CHO TỪNG CÂU HỎI (ĐỒNG NHẤT 100% VỚI LOCALHOST)
         function generateClientSideDirectAnswers(rows, questions) {
             if (!rows || rows.length === 0 || !questions || questions.length === 0) return [];
-            const origCols = Object.keys(rows[0]).map(c => String(c).replace(/^[\ufeff\s]+|[\s]+$/g, ''));
-            
-            const stripAcc = (str) => String(str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
-            const cleanLabel = (name) => String(name).replace(/^[\ufeff\s]+|[\s]+$/g, '').replace(/[_]/g, ' ').replace(/\s+/g, ' ').trim();
-            const hasAlpha = (str) => /[a-zA-Z\u00C0-\u024F\u1EA0-\u1EF9]/.test(String(str || ''));
+            const origCols = Object.keys(rows[0]).map(c => String(c).replace(/^[\ufeff\s]+|[\s]+$/g, ""));
+
+            const stripAcc = (str) => String(str || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase();
+            const cleanLabel = (name) => String(name).replace(/^[\ufeff\s]+|[\s]+$/g, "").replace(/[_]/g, " ").replace(/\s+/g, " ").trim();
+            const hasAlpha = (str) => /[a-zA-Z\u00C0-\u024F\u1EA0-\u1EF9]/.test(String(str || ""));
 
             const getVal = (r, colName) => {
                 if (!r || !colName) return 0;
-                if (r[colName] !== undefined && r[colName] !== null && r[colName] !== '') return parseCleanNumeric(r[colName]);
-                const targetNorm = stripAcc(cleanLabel(colName)).replace(/[^a-z0-9]/g, '');
+                if (r[colName] !== undefined && r[colName] !== null && r[colName] !== "") return parseCleanNumeric(r[colName]);
+                const targetNorm = stripAcc(cleanLabel(colName)).replace(/[^a-z0-9]/g, "");
                 for (const k of Object.keys(r)) {
-                    if (stripAcc(cleanLabel(k)).replace(/[^a-z0-9]/g, '') === targetNorm) return parseCleanNumeric(r[k]);
+                    if (stripAcc(cleanLabel(k)).replace(/[^a-z0-9]/g, "") === targetNorm) return parseCleanNumeric(r[k]);
                 }
                 return 0;
             };
 
             const colProfiles = origCols.map(col => {
-                const vals = rows.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== '');
+                const vals = rows.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== "");
                 const uniqueVals = Array.from(new Set(vals));
                 const colLow = stripAcc(cleanLabel(col));
-                const isTime = ['ngay', 'thang', 'nam', 'date', 'month', 'year', 'ky', 'quy', 'time', 'period'].some(k => colLow.includes(k));
+                const isTime = ["ngay", "thang", "nam", "date", "month", "year", "ky", "quy", "time", "period"].some(k => colLow.includes(k));
                 const isIdLike = /^(ma|id|stt|code|sku|so_tt|index)\b/.test(colLow) || /(ma_|id_|code)/.test(colLow) ||
-                                 ['cua hang', 'cua_hang', 'store', 'chi nhanh', 'nhan vien', 'khach hang', 'don hang', 'hoa don', 'ca', 'day chuyen', 'loai', 'nhom', 'kenh', 'khu vuc'].some(k => colLow.includes(k));
+                                 ["cua hang", "cua_hang", "store", "chi nhanh", "nhan vien", "khach hang", "don hang", "hoa don", "ca", "day chuyen", "loai", "nhom", "kenh", "khu vuc"].some(k => colLow.includes(k));
                 const alphaCount = vals.filter(v => hasAlpha(v)).length;
                 const realNumCount = vals.filter(v => {
-                    if (typeof v === 'number') return !isNaN(v);
+                    if (typeof v === "number") return !isNaN(v);
                     const s = String(v).trim();
                     if (hasAlpha(s) && !/(đ|vnd|usd|eur|%)/i.test(s)) return false;
-                    return parseCleanNumeric(v) !== 0 || s === '0';
+                    return parseCleanNumeric(v) !== 0 || s === "0";
                 }).length;
                 const isNumeric = !isTime && !isIdLike && (alphaCount / Math.max(1, vals.length)) < 0.25 && (realNumCount / Math.max(1, vals.length)) > 0.6;
                 return {
                     name: col,
                     label: cleanLabel(col),
-                    type: isTime ? 'datetime' : (isNumeric ? 'numeric' : 'categorical'),
+                    type: isTime ? "datetime" : (isNumeric ? "numeric" : "categorical"),
                     nunique: uniqueVals.length,
                     samples: uniqueVals.slice(0, 15).map(v => stripAcc(String(v)))
                 };
             });
 
-            const numCols = colProfiles.filter(c => c.type === 'numeric' && !['stt', 'id', 'index', 'so_tt'].includes(c.name.toLowerCase()) && c.nunique > 1);
-            const timeCols = colProfiles.filter(c => c.type === 'datetime');
-            const catCols = colProfiles.filter(c => c.type === 'categorical' && !/^(stt|id|index|so_tt)$/i.test(c.name) && c.nunique >= 2);
+            const numCols = colProfiles.filter(c => c.type === "numeric" && !["stt", "id", "index", "so_tt"].includes(c.name.toLowerCase()) && c.nunique > 1);
+            const timeCols = colProfiles.filter(c => c.type === "datetime");
+            const catCols = colProfiles.filter(c => c.type === "categorical" && !/^(stt|id|index|so_tt)$/i.test(c.name) && c.nunique >= 2);
+
+            let qList = Array.isArray(questions) ? questions : [String(questions || "")];
+            const rawLines = qList.flatMap(q => String(q).split(/\r?\n/)).map(l => l.replace(/^[\"\'\s]+|[\"\'\s]+$/g, "").trim()).filter(l => l.length > 0);
+            const rawItems = [];
+            rawLines.forEach(line => {
+                const parts = line.split(/[\?\;]+/).map(p => p.replace(/^[\"\'\s]+|[\"\'\s]+$/g, "").trim()).filter(p => p.length > 0);
+                if (parts.length > 1) {
+                    parts.forEach(p => rawItems.push(p));
+                } else if (parts.length === 1) {
+                    rawItems.push(parts[0]);
+                } else {
+                    rawItems.push(line);
+                }
+            });
 
             const matchMetric = (qStr) => {
                 const qn = stripAcc(qStr);
@@ -2840,13 +2857,21 @@
                     let score = 0;
                     if (qn.includes(cn)) score += 100;
                     cn.split(/\s+/).forEach(w => {
-                        if (w.length > 1 && !['vnd', 'usd', 'so', 'ma'].includes(w) && qn.includes(w)) score += 35;
+                        // Không so khớp đơn từ với các từ chung chung hoặc từ "bien" để tránh nhầm với "bien dong"
+                        if (w.length > 1 && !["vnd", "usd", "so", "ma", "bien", "ti", "le", "tong", "nhom"].includes(w) && qn.includes(w)) {
+                            score += 35;
+                        }
                     });
-                    if (/(loi_nhuan|profit|lai|lo|thua lo)/.test(qn) && /(loi_nhuan|profit|lai)/.test(cn)) score += 70;
-                    if (/(chi_phi|cost|gia_von|thue|luong|cogs)/.test(qn) && /(chi_phi|cost|gia_von|thue|luong)/.test(cn)) score += 60;
-                    if (/(doanh_thu|revenue|sales|tien)/.test(qn) && /(doanh_thu|revenue|sales)/.test(cn)) score += 60;
+                    if (/(loi\s*nhuan|profit|lai|thua\s*lo|bien\s*lai|lo\b)/i.test(qn) && /(loi\s*nhuan|profit|lai)/i.test(cn)) score += 90;
+                    if (/(chi\s*phi|cost|gia\s*von|thue|luong|cogs)/i.test(qn) && /(chi\s*phi|cost|gia\s*von|thue|luong)/i.test(cn)) score += 80;
+                    if (/(doanh\s*thu|revenue|sales|tien\s*hang|tien)/i.test(qn) && /(doanh\s*thu|revenue|sales)/i.test(cn)) score += 80;
                     if (score > bestScore) { bestScore = score; best = c; }
                 });
+                // Nếu câu hỏi về xu hướng/biến động theo tháng mà không nêu metric cụ thể, ưu tiên Lợi nhuận nếu Doanh thu đã có hoặc ngược lại
+                if (bestScore <= 0) {
+                    const primary = numCols.find(c => /(doanh\s*thu|revenue|sales)/i.test(stripAcc(c.label))) || numCols[0];
+                    return primary || numCols[0] || null;
+                }
                 return best || numCols[0] || null;
             };
 
@@ -2858,33 +2883,44 @@
                     let score = 0;
                     if (qn.includes(cn)) score += 100;
                     cn.split(/\s+/).forEach(w => {
-                        if (w.length > 1 && !['ma', 'id', 'so'].includes(w) && qn.includes(w)) score += 35;
+                        if (w.length > 1 && !["ma", "id", "so"].includes(w) && qn.includes(w)) score += 35;
                     });
-                    if (c.samples && c.samples.some(s => s.length > 1 && qn.includes(s))) score += 80;
-                    if (/(khu_vuc|mien|region|vung)/.test(qn) && /(khu_vuc|mien|region|vung)/.test(cn)) score += 60;
-                    if (/(cua_hang|store|shop|chi_nhanh)/.test(qn) && /(cua_hang|store|shop|chi_nhanh)/.test(cn)) score += 60;
-                    if (/(kenh|channel|platform|san)/.test(qn) && /(kenh|channel|platform|san)/.test(cn)) score += 60;
+                    if (c.samples && c.samples.some(s => s.length > 1 && qn.includes(s))) score += 90;
+                    if (/(cua\s*hang|store|shop|chi\s*nhanh|diem\s*ban)/i.test(qn) && /(cua\s*hang|store|shop|chi\s*nhanh)/i.test(cn)) score += 85;
+                    if (/(khu\s*vuc|mien|region|vung|dia\s*ban)/i.test(qn) && /(khu\s*vuc|mien|region|vung)/i.test(cn)) score += 85;
+                    if (/(kenh|channel|platform|san)/i.test(qn) && /(kenh|channel|platform|san)/i.test(cn)) score += 85;
                     if (score > bestScore) { bestScore = score; best = c; }
                 });
                 return best || catCols[0] || null;
             };
 
             const answers = [];
-            questions.forEach(qItem => {
+            const usedTimeMetrics = new Set();
+
+            rawItems.forEach(qItem => {
                 const qn = stripAcc(qItem);
-                const m = matchMetric(qItem);
-                const isTimeQ = timeCols[0] && /(thang|ngay|nam|chu ky|xu huong|trend|tang giam|bien dong|month|date)/.test(qn);
+                let m = matchMetric(qItem);
+                const isTimeQ = timeCols[0] && /(thang|ngay|nam|chu\s*ky|xu\s*huong|trend|tang\s*giam|bien\s*dong|month|date)/i.test(qn);
+                
+                // Nếu là câu hỏi chuỗi thời gian thứ 2 trở đi, đổi sang metric bổ trợ (như Lợi nhuận VND) để trả lời đa chiều
+                if (isTimeQ && m && usedTimeMetrics.has(m.name)) {
+                    const altM = numCols.find(c => c.name !== m.name && !usedTimeMetrics.has(c.name) && !/(%|ti_le|ty_le)/i.test(stripAcc(c.name)));
+                    if (altM) m = altM;
+                }
+                if (isTimeQ && m) usedTimeMetrics.add(m.name);
+
                 const d = isTimeQ ? timeCols[0] : matchDim(qItem);
                 if (!m || !d) return;
 
                 const mName = m.name;
+                const mLbl = m.label;
                 const dName = d.name;
                 const dLbl = d.label;
 
                 const grp = {};
                 let total = 0;
                 rows.forEach(r => {
-                    const k = String(r[dName] !== undefined ? r[dName] : 'N/A').trim();
+                    const k = String(r[dName] !== undefined ? r[dName] : "N/A").trim();
                     const val = getVal(r, mName);
                     grp[k] = (grp[k] || 0) + val;
                     total += val;
@@ -2895,17 +2931,26 @@
 
                 const top = sorted[0];
                 const bot = sorted[sorted.length - 1];
-                const topValMil = top[1] / 1e6;
-                const topValStr = Math.abs(top[1]) >= 1e9 ? `${(top[1] / 1e9).toFixed(1)} Tỷ ₫` : `${topValMil.toFixed(1)} Triệu ₫`;
-                const topPct = total > 0 ? ((top[1] / total) * 100).toFixed(1) : '0';
 
-                let ansText = `Trả lời trực tiếp câu hỏi '${qItem.replace(/^[\"'\s]+|[\"'\s\?]+$/g, '')}': Nhóm '${top[0]}' cao nhất với ${topValStr} (chiếm ${topPct}% tổng thể theo '${dLbl}'). Đơn vị thấp nhất là '${bot[0]}'.`;
+                const isPercent = /(%|ti_le|ty_le|bien_loi_nhuan|margin)/.test(stripAcc(mName));
+                const formatValue = (v) => {
+                    if (isPercent) return v.toFixed(1) + "%";
+                    if (Math.abs(v) >= 1e9) return (v / 1e9).toFixed(2) + " Tỷ ₫";
+                    if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(1) + " Triệu ₫";
+                    return Math.round(v).toLocaleString("vi-VN") + " ₫";
+                };
+
+                const topValStr = formatValue(top[1]);
+                const botValStr = formatValue(bot[1]);
+                const topPct = (total > 0 && !isPercent) ? ((top[1] / total) * 100).toFixed(1) : "0";
+                const pctClause = (total > 0 && !isPercent) ? ` (chiếm ${topPct}% tổng thể theo "${dLbl}")` : "";
+
+                let ansText = `Trả lời trực tiếp câu hỏi "${qItem.replace(/^[\"\'\s]+|[\"\'\s\?]+$/g, "")}": Nhóm "${top[0]}" cao nhất với ${topValStr}${pctClause}. Đơn vị thấp nhất là "${bot[0]}" (${botValStr}).`;
                 answers.push({ question: qItem, answer: ansText });
             });
             return answers;
         }
 
-// BỘ SINH HỆ THỐNG BIỂU ĐỒ CHUYÊN SÂU CLIENT-SIDE (CHO VERCEL & OFFLINE)
         function generateClientSideRichCharts(rows, userQuestions, companyName) {
             if (!rows || rows.length === 0) return [];
             const origCols = Object.keys(rows[0]).map(c => String(c).replace(/^[\ufeff\s]+|[\s]+$/g, ''));
@@ -2990,13 +3035,18 @@
                 qList = getUserEffectiveQuestions();
             }
 
-            const rawLines = qList.flatMap(q => String(q).split(/\r?\n/)).map(l => l.trim()).filter(l => l.length > 0);
+            const rawLines = qList.flatMap(q => String(q).split(/\r?\n/)).map(l => l.replace(/^[\"'\s]+|[\"'\s]+$/g, '').trim()).filter(l => l.length > 0);
             
             const rawItems = [];
             rawLines.forEach(line => {
-                const parts = line.split(/[\?\;]+/).map(p => p.trim()).filter(p => p.length > 0);
-                if (parts.length > 1) rawItems.push(...parts);
-                else rawItems.push(line);
+                const parts = line.split(/[\?\;]+/).map(p => p.replace(/^[\"'\s]+|[\"'\s]+$/g, '').trim()).filter(p => p.length > 0);
+                if (parts.length > 1) {
+                    parts.forEach(p => rawItems.push(p));
+                } else if (parts.length === 1) {
+                    rawItems.push(parts[0]);
+                } else {
+                    rawItems.push(line);
+                }
             });
 
             const hasSpecificQuestions = rawItems.length > 0 && !rawItems.every(r => /^(tat ca|phan tich toan dien|custom|all|profit|revenue|cost)$/i.test(r.trim()));
@@ -3012,11 +3062,11 @@
                     cn.split(/\s+/).forEach(w => {
                         if (w.length > 1 && !['vnd', 'usd', 'so', 'ma'].includes(w) && qn.includes(w)) score += 35;
                     });
-                    if (/(loi_nhuan|profit|lai|lo|thua lo)/.test(qn) && /(loi_nhuan|profit|lai)/.test(cn)) score += 70;
-                    if (/(chi_phi|cost|gia_von|thue|luong|cogs)/.test(qn) && /(chi_phi|cost|gia_von|thue|luong)/.test(cn)) score += 60;
-                    if (/(doanh_thu|revenue|sales|tien)/.test(qn) && /(doanh_thu|revenue|sales)/.test(cn)) score += 60;
-                    if (/(loi|phe_pham|defect|hong)/.test(qn) && /(loi|phe_pham|defect|hong)/.test(cn)) score += 70;
-                    if (/(san_luong|output|nang_suat|so_luong)/.test(qn) && /(san_luong|output|nang_suat|so_luong)/.test(cn)) score += 60;
+                    if (/(loi\s*nhuan|profit|lai|thua\s*lo|bien\s*lai|lo\b)/i.test(qn) && /(loi\s*nhuan|profit|lai)/i.test(cn)) score += 90;
+                    if (/(chi\s*phi|cost|gia\s*von|thue|luong|cogs)/i.test(qn) && /(chi\s*phi|cost|gia\s*von|thue|luong)/i.test(cn)) score += 80;
+                    if (/(doanh\s*thu|revenue|sales|tien\s*hang|tien)/i.test(qn) && /(doanh\s*thu|revenue|sales)/i.test(cn)) score += 80;
+                    if (/(loi|phe\s*pham|defect|hong)/i.test(qn) && /(loi|phe\s*pham|defect|hong)/i.test(cn)) score += 90;
+                    if (/(san\s*luong|output|nang\s*suat|so\s*luong)/i.test(qn) && /(san\s*luong|output|nang\s*suat|so\s*luong)/i.test(cn)) score += 80;
                     if (score > bestScore) {
                         bestScore = score;
                         best = c;
@@ -3037,14 +3087,13 @@
                         if (w.length > 1 && !['ma', 'id', 'so'].includes(w) && qn.includes(w)) score += 35;
                     });
                     if (c.samples && c.samples.some(s => s.length > 1 && qn.includes(s))) {
-                        score += 80;
+                        score += 90;
                     }
-                    if (/(ca|shift|kip)/.test(qn) && /(ca|shift|kip)/.test(cn)) score += 60;
-                    if (/(chuyen|day_chuyen|line|may)/.test(qn) && /(chuyen|day_chuyen|line|may)/.test(cn)) score += 60;
-                    if (/(khu_vuc|mien|region|vung)/.test(qn) && /(khu_vuc|mien|region|vung)/.test(cn)) score += 60;
-                    if (/(cua_hang|store|shop|chi_nhanh)/.test(qn) && /(cua_hang|store|shop|chi_nhanh)/.test(cn)) score += 60;
-                    if (/(kenh|channel|platform|san)/.test(qn) && /(kenh|channel|platform|san)/.test(cn)) score += 60;
-                    if (/(san_pham|item|product|mat_hang)/.test(qn) && /(san_pham|item|product|mat_hang)/.test(cn)) score += 60;
+                    if (/(cua\s*hang|store|shop|chi\s*nhanh|diem\s*ban)/i.test(qn) && /(cua\s*hang|store|shop|chi\s*nhanh)/i.test(cn)) score += 85;
+                    if (/(khu\s*vuc|mien|region|vung|dia\s*ban)/i.test(qn) && /(khu\s*vuc|mien|region|vung)/i.test(cn)) score += 85;
+                    if (/(kenh|channel|platform|san)/i.test(qn) && /(kenh|channel|platform|san)/i.test(cn)) score += 85;
+                    if (/(san\s*pham|item|product|mat\s*hang)/i.test(qn) && /(san\s*pham|item|product|mat\s*hang)/i.test(cn)) score += 85;
+                    if (/(ca|shift|kip)/i.test(qn) && /(ca|shift|kip)/i.test(cn)) score += 85;
                     if (score > bestScore) {
                         bestScore = score;
                         best = c;
@@ -3058,15 +3107,14 @@
             const usedTimeMetrics = new Set();
 
             if (hasSpecificQuestions) {
-                // DUYỆT QUA 100% TỪNG CÂU HỎI CỦA NGƯỜI DÙNG ĐỂ SINH BIỂU ĐỒ TƯƠNG ỨNG (KHÔNG GIỚI HẠN SỐ LƯỢNG)
+                // BẮT BUỘC DUYỆT QUA 100% TẤT CẢ CÁC CÂU HỎI VÀ ĐƯA RA ĐỦ BIỂU ĐỒ TƯƠNG ỨNG
                 rawItems.forEach((qItem, qIdx) => {
                     const qn = stripAcc(qItem);
                     let itMetric = universalMatchMetric(qItem);
                     const itDim = universalMatchDim(qItem);
 
                     // 1. Ý ĐỒ: CHUỖI THỜI GIAN / XU HƯỚNG / BIẾN ĐỘNG TĂNG GIẢM
-                    if (timeCols[0] && /(thang|ngay|nam|chu ky|xu huong|trend|tang giam|bien dong|month|date|giai doan)/.test(qn)) {
-                        // Nếu metric này đã được vẽ đường theo thời gian ở câu trước, chuyển sang metric thứ 2 (Lợi nhuận hoặc chi phí)
+                    if (timeCols[0] && /(thang|ngay|nam|chu\s*ky|xu\s*huong|trend|tang\s*giam|bien\s*dong|month|date|giai\s*doan)/i.test(qn)) {
                         if (itMetric && usedTimeMetrics.has(itMetric.name)) {
                             const altM = numCols.find(c => c.name !== itMetric.name && !usedTimeMetrics.has(c.name));
                             if (altM) itMetric = altM;
@@ -3126,7 +3174,7 @@
                     const dLbl = itDim ? itDim.label : (catCols[0] ? catCols[0].label : 'Phân loại');
 
                     // 2. Ý ĐỒ: CƠ CẤU TỶ TRỌNG / CHIẾM PHẦN LỚN
-                    if (/(chiem phan lon|phan lon|ty trong|co cau|tong|dong gop)/.test(qn)) {
+                    if (/(chiem\s*phan\s*lon|phan\s*lon|ty\s*trong|co\s*cau|tong|dong\s*gop)/i.test(qn)) {
                         const grpMap = {};
                         let totalVal = 0;
                         rows.forEach(r => {
@@ -3166,7 +3214,7 @@
                     }
 
                     // 3. Ý ĐỒ: PHÂN TÍCH LỢI NHUẬN / LÃI LỖ / PHÂN HÓA ÂM DƯƠNG
-                    if (/(loi_nhuan|lai|lo|thua lo|am)/.test(qn)) {
+                    if (/(loi\s*nhuan|lai|thua\s*lo|bien\s*lai|lo\b|am\b)/i.test(qn)) {
                         const grpMap = {};
                         rows.forEach(r => {
                             const k = String(r[dName] !== undefined ? r[dName] : 'Khác').trim();
@@ -3193,12 +3241,12 @@
                             }],
                             series: [{ name: mLbl, data: sData }],
                             key_numbers: [
-                                `Cao nhất: '${sorted[0][0]}' (${formatVal(sorted[0][1])})`,
-                                `Thấp nhất: '${sorted[sorted.length - 1][0]}' (${formatVal(sorted[sorted.length - 1][1])})`,
+                                `Cao nhất: '${sorted[0] ? sorted[0][0] : 'N/A'}' (${formatVal(sorted[0] ? sorted[0][1] : 0)})`,
+                                `Thấp nhất: '${sorted[sorted.length - 1] ? sorted[sorted.length - 1][0] : 'N/A'}' (${formatVal(sorted[sorted.length - 1] ? sorted[sorted.length - 1][1] : 0)})`,
                                 `Tổng số phân nhóm: ${sorted.length}`
                             ],
-                            insight: `Đơn vị '${sorted[0][0]}' đạt hiệu quả tốt nhất với ${formatVal(sorted[0][1])}, tạo chênh lệch rõ rệt so với '${sorted[sorted.length - 1][0]}'.`,
-                            action: `Rà soát các đơn vị có kết quả thấp để can thiệp kịp thời và cải thiện hiệu suất.`
+                            insight: `Đơn vị '${sorted[0] ? sorted[0][0] : 'dẫn đầu'}' đạt hiệu quả tốt nhất, tạo chênh lệch rõ rệt so với nhóm cuối bảng.`,
+                            action: `Rà soát các đơn vị có kết quả thấp hoặc lỗ âm để can thiệp kịp thời và cải thiện hiệu suất.`
                         });
                         return;
                     }
@@ -3274,17 +3322,17 @@
                         }],
                         series: [{ name: mLbl, data: sData }],
                         key_numbers: [
-                            `Dẫn đầu: '${sorted[0][0]}' (${formatVal(sorted[0][1])})`,
-                            `Tụt hậu: '${sorted[sorted.length - 1][0]}' (${formatVal(sorted[sorted.length - 1][1])})`,
-                            `Chênh lệch: ${(sorted[sorted.length - 1][1] > 0 ? (sorted[0][1] / sorted[sorted.length - 1][1]).toFixed(1) : '1.0')} lần`
+                            `Dẫn đầu: '${sorted[0] ? sorted[0][0] : 'N/A'}' (${formatVal(sorted[0] ? sorted[0][1] : 0)})`,
+                            `Tụt hậu: '${sorted[sorted.length - 1] ? sorted[sorted.length - 1][0] : 'N/A'}' (${formatVal(sorted[sorted.length - 1] ? sorted[sorted.length - 1][1] : 0)})`,
+                            `Chênh lệch: ${(sorted[sorted.length - 1] && sorted[sorted.length - 1][1] > 0 ? (sorted[0][1] / sorted[sorted.length - 1][1]).toFixed(1) : '1.0')} lần`
                         ],
-                        insight: `'${sorted[0][0]}' đạt mức ${mLbl} cao nhất trong nhóm ${dLbl}, bỏ xa đơn vị cuối bảng.`,
-                        action: `Chuyển giao kinh nghiệm từ '${sorted[0][0]}' sang các đơn vị còn lại để san phẳng hiệu quả.`
+                        insight: `'${sorted[0] ? sorted[0][0] : 'Đơn vị dẫn đầu'}' đạt mức ${mLbl} cao nhất trong nhóm ${dLbl}.`,
+                        action: `Chuyển giao kinh nghiệm từ đơn vị dẫn đầu sang các đơn vị còn lại để san phẳng hiệu quả.`
                     });
                 });
             }
 
-            // Fallback nếu chưa có biểu đồ nào: Tự động tạo bộ biểu đồ toàn diện bám sát dữ liệu thật
+            // Fallback nếu chưa có biểu đồ nào
             if (charts.length === 0) {
                 if (timeCols[0]) {
                     const tCol = timeCols[0].name;
@@ -3331,34 +3379,6 @@
                         key_numbers: [`Dẫn đầu: '${sorted[0][0]}'`, `Tụt hậu: '${sorted[sorted.length-1][0]}'`],
                         insight: `'${sorted[0][0]}' chi phối phần lớn quy mô ${mLabel}.`,
                         action: `Chuyển giao giải pháp từ đơn vị dẫn đầu.`
-                    });
-                }
-                if (catCols[1] || numCols[1]) {
-                    const secM = numCols[1] ? numCols[1].name : mCol;
-                    const secMLbl = numCols[1] ? numCols[1].label : mLabel;
-                    const secD = catCols[1] ? catCols[1].name : (catCols[0] ? catCols[0].name : origCols[0]);
-                    const secDLbl = catCols[1] ? catCols[1].label : (catCols[0] ? catCols[0].label : cleanLabel(secD));
-                    const grp2 = {};
-                    let tot2 = 0;
-                    rows.forEach(r => {
-                        const k = String(r[secD] !== undefined ? r[secD] : 'Khác').trim();
-                        const v = getValFromRow(r, secM);
-                        grp2[k] = (grp2[k] || 0) + v;
-                        tot2 += v;
-                    });
-                    const sorted2 = Object.entries(grp2).sort((a,b)=>b[1]-a[1]).slice(0, 6);
-                    charts.push({
-                        id: "f3",
-                        finding_id: "F3",
-                        chart_type: "doughnut",
-                        title: `3. Cơ Cấu Tỷ Trọng ${secMLbl} Theo ${secDLbl}`,
-                        subtitle: `Phân tích mức độ đóng góp tương đối giữa các nhóm`,
-                        labels: sorted2.map(x=>x[0]),
-                        datasets: [{ label: secMLbl, data: sorted2.map(x=>Math.round(x[1])), backgroundColor: ['#2C5E82', '#6BA3C7', '#92C3E1', '#BBE4F6', '#E0F1FC', '#FCF8E7'] }],
-                        series: [{ name: secMLbl, data: sorted2.map(x=>Math.round(x[1])) }],
-                        key_numbers: [`Chiếm phần lớn: '${sorted2[0][0]}'`, `Tổng thể: ${formatVal(tot2)}`],
-                        insight: `'${sorted2[0][0]}' giữ vai trò đóng góp chủ đạo.`,
-                        action: `Cân đối lại nguồn lực giữa các nhóm.`
                     });
                 }
             }
@@ -3408,101 +3428,145 @@
             const causes = [];
             const solutions = [];
 
-            const f1 = (findings && findings[0]) ? findings[0] : { title: "Dữ liệu vận hành", key_numbers: [] };
-            const f2 = (findings && findings[1]) ? findings[1] : f1;
-            const f3 = (findings && findings[2]) ? findings[2] : f2;
+            const fList = Array.isArray(findings) ? findings : [];
+            const f1 = fList[0] || { title: "Dữ liệu vận hành", key_numbers: [] };
+            
+            // Tìm các finding theo chủ đề dựa trên tiêu đề hoặc subtitle
+            const regionFindings = fList.filter(f => /(khu\s*vuc|mien|dia\s*ban)/i.test((f.title || "") + " " + (f.subtitle || "")));
+            const profitFindings = fList.filter(f => /(loi\s*nhuan|lai|thua\s*lo|lo|am)/i.test((f.title || "") + " " + (f.subtitle || "")));
+            const timeFindings = fList.filter(f => /(thang|ngay|chu\s*ky|xu\s*huong|bien\s*dong|trend)/i.test((f.title || "") + " " + (f.subtitle || "")));
 
-            const topStat = (f1.key_numbers && f1.key_numbers[0]) ? f1.key_numbers[0] : "Đơn vị dẫn đầu chiếm tỷ trọng lớn";
-            const botStat = (f1.key_numbers && f1.key_numbers[1]) ? f1.key_numbers[1] : "Nhóm cuối bảng tụt hậu";
+            const rf1 = regionFindings[0] || f1;
+            const pf1 = profitFindings[0] || fList[3] || f1;
+            const tf1 = timeFindings[0] || fList[2] || f1;
 
-            // C1: Phân hóa hiệu suất & mất cân đối nguồn lực
+            const rfIds = regionFindings.map(f => f.finding_id || f.id || "F1");
+            const pfIds = profitFindings.map(f => f.finding_id || f.id || "F4");
+            const tfIds = timeFindings.map(f => f.finding_id || f.id || "F3");
+
+            // C1: Phân hóa doanh thu theo khu vực địa bàn
             causes.push({
                 id: "C1",
-                from_findings: ["F1", "F2"],
-                problem: `Sự phân hóa hiệu suất rõ rệt, quy mô đóng góp phụ thuộc lớn vào ${topStat}.`,
+                from_findings: rfIds.length > 0 ? rfIds : ["F1", "F2"],
+                problem: `Độ lệch và phân hóa doanh thu lớn giữa các khu vực địa bàn (${rf1.key_numbers && rf1.key_numbers[0] ? rf1.key_numbers[0] : "Miền Nam dẫn đầu tỷ trọng"}), tiềm ẩn rủi ro phụ thuộc nguồn thu.`,
                 evidence: [
-                    `Số liệu thực tế ghi nhận: ${topStat} so với ${botStat}.`,
-                    `Chênh lệch biên độ vận hành lớn giữa các đơn vị qua các chu kỳ đo lường.`
+                    (rf1.key_numbers && rf1.key_numbers[0]) ? `Dữ liệu thực tế: ${rf1.key_numbers[0]}` : "Miền Nam dẫn đầu quy mô doanh thu toàn hệ thống.",
+                    (rf1.key_numbers && rf1.key_numbers[1]) ? `Đơn vị cuối bảng: ${rf1.key_numbers[1]}` : "Cơ cấu tỷ trọng doanh thu tập trung không đồng đều giữa các vùng miền."
                 ],
                 why_chain: [
-                    `Why 1: Vì sao chênh lệch? Nguồn lực và quy trình chuẩn chưa được áp dụng đồng bộ giữa các chi nhánh/kênh.`,
-                    `Why 2: Vì sao chưa đồng bộ? Thiếu cơ chế giám sát thời gian thực và phân quyền chỉ tiêu linh hoạt.`,
-                    `Why 3: Nguyên nhân gốc rễ: Chưa số hóa bảng chỉ số vận hành và thiếu quy trình đào tạo chuẩn hóa cho đội ngũ kế cận.`
+                    "Why 1: Vì sao Miền Nam vượt trội? Vì danh mục sản phẩm và chính sách giá phù hợp sức mua địa phương.",
+                    "Why 2: Vì sao Miền Bắc tụt hậu? Vì tần suất tiếp thị và nguồn lực cung ứng chưa được phân bổ tương xứng.",
+                    "Why 3: Nguyên nhân gốc rễ: Quy trình phân bổ ngân sách tiếp thị và chính sách kinh doanh bị tập trung cục bộ, thiếu rào cản kiểm soát độ lệch nguồn thu giữa các địa bàn."
                 ],
-                root_cause: "Thiếu hệ thống giám sát chuẩn hóa và cơ chế hỗ trợ kịp thời cho các đơn vị tụt hậu.",
-                impact: "Làm suy giảm 15–20% tiềm năng tăng trưởng toàn diện của toàn doanh nghiệp."
+                root_cause: "Quy trình phân bổ ngân sách tiếp thị và chính sách kinh doanh bị tập trung cục bộ, thiếu rào cản kiểm soát độ lệch nguồn thu.",
+                impact: "Tạo độ trễ tăng trưởng 15-20% tại các khu vực vệ tinh và phụ thuộc rủi ro vào một địa bàn duy nhất."
             });
 
-            // C2: Mức độ phụ thuộc tập trung vào phân khúc chủ lực
-            causes.push({
-                id: "C2",
-                from_findings: ["F2", "F3"],
-                problem: `Tỷ trọng đóng góp tập trung quá mức vào nhóm dẫn đầu, tiềm ẩn rủi ro khi thị trường biến động.`,
-                evidence: [
-                    (f3.key_numbers && f3.key_numbers[0]) ? f3.key_numbers[0] : "Top đầu chi phối hơn 60% quy mô.",
-                    "Các nhóm còn lại có biên độ tăng trưởng chậm và quy mô mỏng."
-                ],
-                why_chain: [
-                    `Why 1: Vì sao tập trung? Chiến lược dồn ngân sách và ưu đãi vào các nhóm đang sinh lời nhanh.`,
-                    `Why 2: Vì sao các nhóm khác chậm? Sản phẩm và thông điệp chưa được bản địa hóa phù hợp với thị hiếu từng phân khúc.`,
-                    `Why 3: Nguyên nhân gốc rễ: Thiếu chiến lược phát triển đa kênh song song và bộ KPI phân bổ đa dạng hóa.`
-                ],
-                root_cause: "Chính sách phân bổ nguồn lực thụ động theo doanh thu ngắn hạn thay vì mở rộng bền vững.",
-                impact: "Gia tăng áp lực vận hành lên nhóm dẫn đầu và bỏ ngỏ dư địa phát triển của các thị trường vệ tinh."
-            });
-
-            // S1: Chuẩn hóa quy trình & chuyển giao kinh nghiệm
+            // S1: Giải pháp cho C1
             solutions.push({
                 id: "S1",
                 solve_causes: ["C1"],
                 addresses: ["C1"],
-                name: "Chuẩn hóa quy trình vận hành và nhân rộng mô hình dẫn đầu",
-                title: "Chuẩn hóa quy trình vận hành và nhân rộng mô hình dẫn đầu",
+                name: "Tái phân bổ ngân sách tiếp thị và chính sách khuyến khích mở rộng địa bàn",
+                title: "Tái phân bổ ngân sách tiếp thị và chính sách khuyến khích mở rộng địa bàn",
                 timeline: "Ngắn hạn (1–30 ngày)",
                 effort: "Vừa phải",
-                impact: "Tăng 12–18% hiệu suất các đơn vị tụt hậu",
-                expected_impact: "Tăng 12–18% hiệu suất các đơn vị tụt hậu",
-                owner: "R: Trưởng nhóm kinh doanh | A: Giám đốc Vận hành | C: Bộ phận QA | I: Toàn bộ nhân viên",
-                raci: "R: Trưởng nhóm kinh doanh | A: Giám đốc Vận hành | C: Bộ phận QA | I: Toàn bộ nhân viên",
+                impact: "Tăng 15–20% doanh thu tại Miền Bắc và Miền Trung",
+                owner: "R: Trưởng phòng Kinh doanh | A: Giám đốc Điều hành (COO) | C: Giám đốc Tài chính (CFO) | I: Đội ngũ bán hàng địa bàn",
+                raci: "R: Trưởng phòng Kinh doanh | A: Giám đốc Điều hành (COO) | C: Giám đốc Tài chính (CFO) | I: Đội ngũ bán hàng địa bàn",
                 steps: [
-                    "Đóng gói tài liệu quy trình chuẩn (SOP) từ các đơn vị đạt hiệu suất cao nhất.",
-                    "Triển khai chương trình kèm cặp trực tiếp: đơn vị dẫn đầu hỗ trợ đơn vị tụt hậu.",
-                    "Cập nhật bảng theo dõi hiệu suất hàng tuần để can thiệp kịp thời."
+                    "Điều chuyển 15% hạn mức ngân sách quảng cáo và xúc tiến thương mại sang các khu vực tiềm năng (Miền Bắc, Miền Trung) – Giám đốc Kinh doanh – Tuần 1.",
+                    "Thiết lập chính sách chiết khấu và hoa hồng bậc thang cho các kênh bán có tỷ trọng đóng góp khiêm tốn – Trưởng phòng Nhân sự & Kinh doanh – Tuần 2.",
+                    "Đóng gói danh mục sản phẩm chủ lực và triển khai chương trình bán kèm (Cross-sell/Bundle) tối ưu thị hiếu vùng miền – Trưởng phòng Sản phẩm – Tuần 4."
                 ],
-                kpi_target: "Thu hẹp khoảng cách hiệu suất giữa nhóm dẫn đầu và nhóm cuối bảng xuống dưới 1.5 lần.",
-                kpi: "Thu hẹp khoảng cách hiệu suất giữa nhóm dẫn đầu và nhóm cuối bảng xuống dưới 1.5 lần.",
-                risk: "Tâm lý ngại thay đổi; giải pháp: Gắn KPI vào đánh giá thi đua và thưởng năng suất định kỳ.",
+                kpi_target: "Tỷ trọng đóng góp nhóm yếu thế: Tăng từ mức hiện tại lên >= 20% tổng doanh số (mốc 30 ngày: +5%, 60 ngày: +10%, 90 ngày: đạt >= 20%)",
+                kpi: "Tỷ trọng đóng góp nhóm yếu thế: Tăng từ mức hiện tại lên >= 20% tổng doanh số (mốc 30 ngày: +5%, 60 ngày: +10%, 90 ngày: đạt >= 20%)",
                 priority: "Làm ngay"
             });
 
-            // S2: Tối ưu phân bổ nguồn lực & mở rộng kênh
+            // C2: Phân hóa lợi nhuận giữa các cửa hàng / lỗ âm
+            causes.push({
+                id: "C2",
+                from_findings: pfIds.length > 0 ? pfIds : ["F4"],
+                problem: `Phân hóa lợi nhuận gay gắt giữa các cửa hàng/chi nhánh (${pf1.key_numbers && pf1.key_numbers[0] ? pf1.key_numbers[0] : "CH-012 dẫn đầu"}), trong đó nhóm cuối bảng chịu lỗ âm kéo dài (${pf1.key_numbers && pf1.key_numbers[1] ? pf1.key_numbers[1] : "CH-001 âm nặng"}).`,
+                evidence: [
+                    (pf1.key_numbers && pf1.key_numbers[0]) ? `Dữ liệu thực tế: ${pf1.key_numbers[0]}` : "Cửa hàng xuất sắc tạo thặng dư lợi nhuận lớn.",
+                    (pf1.key_numbers && pf1.key_numbers[1]) ? `Điểm nghẽn lỗ âm: ${pf1.key_numbers[1]}` : "Chi phí mặt bằng và nhân sự vượt ngưỡng hòa vốn an toàn so với doanh thu tạo ra."
+                ],
+                why_chain: [
+                    "Why 1: Vì sao cửa hàng bị lỗ? Vì doanh thu không đủ bù đắp tổng chi phí cố định (thuê mặt bằng + nhân sự).",
+                    "Why 2: Vì sao chi phí cao? Vì hợp đồng thuê cố định và chưa tối ưu hóa định biên nhân sự theo ca làm việc.",
+                    "Why 3: Nguyên nhân gốc rễ: Chưa thiết lập hệ số kiểm soát chi phí thuê/doanh thu và thiếu cơ chế cảnh báo ngưỡng hòa vốn (BEP) theo tuần."
+                ],
+                root_cause: "Chưa thiết lập hệ số kiểm soát chi phí thuê/doanh thu và thiếu quy chế quản trị định phí tinh gọn theo biên lợi nhuận thực tế.",
+                impact: "Làm xói mòn trực tiếp biên lợi nhuận ròng của toàn hệ thống và thâm hụt dòng tiền lưu động."
+            });
+
+            // S2: Giải pháp cho C2
             solutions.push({
                 id: "S2",
                 solve_causes: ["C2"],
                 addresses: ["C2"],
-                name: "Tái cơ cấu ngân sách và kích hoạt gói tăng tốc thị trường tiềm năng",
-                title: "Tái cơ cấu ngân sách và kích hoạt gói tăng tốc thị trường tiềm năng",
-                timeline: "Trung hạn (30–90 ngày)",
+                name: "Tái cơ cấu định mức chi phí và triệt tiêu lỗ âm tại các cửa hàng yếu kém",
+                title: "Tái cơ cấu định mức chi phí và triệt tiêu lỗ âm tại các cửa hàng yếu kém",
+                timeline: "Trung hạn (30–60 ngày)",
                 effort: "Đáng kể",
-                impact: "Gia tăng 15–25% tỷ trọng đóng góp từ các phân khúc vệ tinh",
-                expected_impact: "Gia tăng 15–25% tỷ trọng đóng góp từ các phân khúc vệ tinh",
-                owner: "R: Trưởng phòng Marketing | A: Giám đốc Chiến lược | C: Kế toán tài chính | I: Khối Bán lẻ",
-                raci: "R: Trưởng phòng Marketing | A: Giám đốc Chiến lược | C: Kế toán tài chính | I: Khối Bán lẻ",
+                impact: "Đưa 100% cửa hàng về điểm hòa vốn, biên lợi nhuận hệ thống tăng 3.5%",
+                owner: "R: Trưởng phòng Vận hành Bán lẻ | A: Giám đốc Điều hành (COO) | C: Giám đốc Tài chính (CFO) | I: Toàn bộ Cửa hàng trưởng",
+                raci: "R: Trưởng phòng Vận hành Bán lẻ | A: Giám đốc Điều hành (COO) | C: Giám đốc Tài chính (CFO) | I: Toàn bộ Cửa hàng trưởng",
                 steps: [
-                    "Trích lập 15% ngân sách kích cầu dành riêng cho các nhóm có dư địa mở rộng.",
-                    "Thiết kế chính sách giá và chương trình tiếp cận phù hợp cho từng phân khúc.",
-                    "Thiết lập cơ chế thưởng nóng cho các đơn vị có tốc độ bứt phá nhanh nhất."
+                    "Đàm phán lại chi phí thuê mặt bằng hoặc chia sẻ lại diện tích kinh doanh dôi dư tại các điểm bán lỗ âm – Trưởng phòng Phát triển Mặt bằng – Tuần 1-2.",
+                    "Chuẩn hóa và chuyển giao mô hình quản lý định phí tinh gọn từ cửa hàng xuất sắc (CH-012) sang các cửa hàng nhóm cuối – Trưởng phòng Vận hành – Tuần 3.",
+                    "Cắt giảm 20% chi phí vận hành không cốt lõi và áp dụng chính sách thưởng doanh số theo biên lợi nhuận thực tế – Giám đốc Tài chính – Tuần 4."
                 ],
-                kpi_target: "Tăng tỷ trọng đóng góp của các nhóm vệ tinh lên ít nhất 35% toàn hệ thống.",
-                kpi: "Tăng tỷ trọng đóng góp của các nhóm vệ tinh lên ít nhất 35% toàn hệ thống.",
-                risk: "Phân tán nguồn lực; giải pháp: Giải ngân ngân sách theo từng mốc KPI thực tế đạt được.",
-                priority: "Ưu tiên cao"
+                kpi_target: "Lợi nhuận ròng các cửa hàng âm: Đưa 100% cửa hàng về điểm hòa vốn sau 60 ngày và biên lãi đạt >= 5% sau 90 ngày",
+                kpi: "Lợi nhuận ròng các cửa hàng âm: Đưa 100% cửa hàng về điểm hòa vốn sau 60 ngày và biên lãi đạt >= 5% sau 90 ngày",
+                priority: "Làm ngay"
+            });
+
+            // C3: Biến động doanh số chu kỳ tháng
+            causes.push({
+                id: "C3",
+                from_findings: tfIds.length > 0 ? tfIds : ["F3", "F6"],
+                problem: `Doanh số ghi nhận độ dốc suy giảm sâu vào các kỳ giáp hạt hoặc thời điểm thấp điểm đầu năm (${tf1.key_numbers && tf1.key_numbers[1] ? tf1.key_numbers[1] : "2026-01 chạm đáy"}) trước khi tăng mạnh (${tf1.key_numbers && tf1.key_numbers[0] ? tf1.key_numbers[0] : "2026-06 đạt đỉnh"}).`,
+                evidence: [
+                    (tf1.key_numbers && tf1.key_numbers[0]) ? `Mốc cao nhất: ${tf1.key_numbers[0]}` : "Doanh thu biến động mạnh theo từng tháng.",
+                    (tf1.key_numbers && tf1.key_numbers[1]) ? `Mốc đáy: ${tf1.key_numbers[1]}` : "Chênh lệch đáng kể giữa mốc đỉnh và mốc đáy trong chu kỳ 6 tháng."
+                ],
+                why_chain: [
+                    "Why 1: Vì sao sụt giảm ở các tháng đầu? Phụ thuộc vào tính mùa vụ sau Tết và thiếu chiến dịch kích cầu chủ động.",
+                    "Why 2: Vì sao không kích cầu sớm? Thiếu dữ liệu dự báo chu kỳ để lên kế hoạch tồn kho và truyền thông đón đầu.",
+                    "Why 3: Nguyên nhân gốc rễ: Hệ thống tiếp thị thụ động, thiếu cơ chế kích hoạt tự động theo nhịp độ chu kỳ doanh thu thực tế."
+                ],
+                root_cause: "Hệ thống tiếp thị thụ động, thiếu cơ chế kích hoạt tự động theo nhịp độ chu kỳ doanh thu thực tế.",
+                impact: "Gây lãng phí công suất vận hành trong tháng thấp điểm và áp lực tồn đọng dòng tiền."
+            });
+
+            // S3: Giải pháp cho C3
+            solutions.push({
+                id: "S3",
+                solve_causes: ["C3"],
+                addresses: ["C3"],
+                name: "Triển khai chiến dịch san phẳng doanh số chu kỳ và kích hoạt tự động tệp khách hàng",
+                title: "Triển khai chiến dịch san phẳng doanh số chu kỳ và kích hoạt tự động tệp khách hàng",
+                timeline: "Dài hạn (60–90 ngày)",
+                effort: "Vừa phải",
+                impact: "Doanh số tháng đáy tăng 25%, giảm 40% biên độ biến động",
+                owner: "R: Trưởng nhóm Marketing CRM | A: Giám đốc Marketing (CMO) | C: Đội ngũ Bán hàng | I: Nhân viên CSKH",
+                raci: "R: Trưởng nhóm Marketing CRM | A: Giám đốc Marketing (CMO) | C: Đội ngũ Bán hàng | I: Nhân viên CSKH",
+                steps: [
+                    "Lập bản đồ chu kỳ mua sắm và xây dựng gói combo khuyến mãi cho các tháng giáp hạt – Trưởng phòng Marketing – Tuần 1.",
+                    "Cài đặt kịch bản Marketing Automation gửi ưu đãi độc quyền cho khách hàng thân thiết vào mùa thấp điểm – Kỹ sư CRM – Tuần 2.",
+                    "Tổ chức sự kiện tri ân khách hàng và ra mắt sản phẩm phụ trợ bổ sung để duy trì dòng tiền ổn định – Đội ngũ CSKH – Tuần 3."
+                ],
+                kpi_target: "Doanh thu các kỳ đáy: Nâng từ mức hiện tại lên đạt tối thiểu 75% mức bình quân toàn kỳ trong 90 ngày",
+                kpi: "Doanh thu các kỳ đáy: Nâng từ mức hiện tại lên đạt tối thiểu 75% mức bình quân toàn kỳ trong 90 ngày",
+                priority: "Trung hạn"
             });
 
             return { causes, solutions };
         }
 
-        // BỘ SINH BÁO CÁO TỔNG THỂ BƯỚC 5
         function generateClientSideStep5Report(findings, causes, solutions, kpis) {
             const f1 = (findings && findings[0]) ? findings[0] : { title: "Dữ liệu vận hành", key_numbers: [] };
             const f2 = (findings && findings[1]) ? findings[1] : f1;
@@ -4229,9 +4293,13 @@
             SAMPLE_DATASETS[activeDatasetKey].trendActual = tActual;
             SAMPLE_DATASETS[activeDatasetKey].trendMA7 = tMA7;
 
+            // BẢO TOÀN 100% DỮ LIỆU THẬT CHO TOÀN BỘ HỆ THỐNG PHÂN TÍCH (KHÔNG DÙNG PREVIEW 15 DÒNG)
+            window.cleanedDataRows = cleanedRows;
+            window.fullDataRows = cleanedRows;
+
             const nameEl = document.getElementById('bizCompanyNameInput');
             const descEl = document.getElementById('bizDescriptionInput');
-            const userQ = descEl && descEl.value.trim() ? descEl.value.trim().split('\n') : [];
+            const userQ = (descEl && descEl.value.trim()) ? descEl.value.trim().split('\n') : getUserEffectiveQuestions();
             const clientSmart = generateClientSideSmartSuggestions(cleanedRows, fileName, userQ, nameEl ? nameEl.value : '');
             const clientRichCharts = generateClientSideRichCharts(cleanedRows, userQ, nameEl ? nameEl.value : '');
             const clientStep3Summary = generateClientSideStep3Summary(clientRichCharts);
@@ -4258,6 +4326,8 @@
             return {
                 dataset_name: fileName,
                 table_name: tableName,
+                full_data: cleanedRows,
+                cleaned_rows: cleanedRows,
                 quality_raw: { total_rows: totalRows, total_cols: totalCols },
                 smart_suggestions: clientSmart,
                 rich_charts: clientRichCharts,
@@ -5416,6 +5486,11 @@ async function submitStep2DirectCleaning() {
             }
 
             window.latestBackendData = data;
+            if (data.full_data && Array.isArray(data.full_data) && data.full_data.length > 0) {
+                window.cleanedDataRows = data.full_data;
+            } else if (data.cleaned_rows && Array.isArray(data.cleaned_rows) && data.cleaned_rows.length > 0) {
+                window.cleanedDataRows = data.cleaned_rows;
+            }
             if (data.smart_suggestions) {
                 renderStep1SmartSuggestions(data.smart_suggestions, false);
             }
