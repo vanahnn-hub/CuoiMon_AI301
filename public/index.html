@@ -1610,18 +1610,18 @@
                                     </div>
 
                                     <div class="rounded-2xl border border-pastel-200 bg-white overflow-hidden shadow-2xs">
-                                        <div class="overflow-x-auto">
-                                            <table class="w-full text-left text-xs text-slate-700">
-                                                <thead class="bg-pastel-100/80 text-[11px] font-bold uppercase text-pastel-900 border-b border-pastel-200">
+                                        <div class="overflow-x-auto rounded-2xl border border-pastel-200 bg-white shadow-2xs">
+                                            <table class="w-full text-left border-collapse table-fixed">
+                                                <thead class="bg-pastel-100/90 text-[11px] font-extrabold uppercase text-pastel-900 border-b border-pastel-200">
                                                     <tr>
-                                                        <th class="py-3 px-4">Chỉ Tiêu Đo Lường</th>
-                                                        <th class="py-3 px-4 text-right">Hiện Tại</th>
-                                                        <th class="py-3 px-4 text-right">Mục Tiêu Sau 90 Ngày</th>
-                                                        <th class="py-3 px-4 text-center">Kỳ Hạn / Tác Động</th>
-                                                        <th class="py-3 px-4">Phụ Trách (RACI)</th>
+                                                        <th class="py-3 px-3.5 w-[28%]">Chỉ Tiêu Đo Lường</th>
+                                                        <th class="py-3 px-3 text-right w-[14%] whitespace-nowrap">Hiện Tại</th>
+                                                        <th class="py-3 px-3.5 w-[33%]">Mục Tiêu Sau 90 Ngày</th>
+                                                        <th class="py-3 px-3 text-center w-[12%] whitespace-nowrap">Kỳ Hạn / Tác Động</th>
+                                                        <th class="py-3 px-3.5 w-[13%]">Phụ Trách (RACI)</th>
                                                     </tr>
                                                 </thead>
-                                                <tbody id="reportTargetKpiTableBody" class="divide-y divide-pastel-100">
+                                                <tbody id="reportTargetKpiTableBody" class="divide-y divide-pastel-100 text-xs">
                                                     <!-- Render động qua JS -->
                                                 </tbody>
                                             </table>
@@ -2823,12 +2823,49 @@
                 return val.toLocaleString('vi-VN') + ' đ';
             };
 
+            // PHÂN TÍCH YÊU CẦU CỦA NGƯỜI DÙNG ĐỂ CHỌN ĐÚNG CÁC CHIỀU CHO TỪNG LOẠI BIỂU ĐỒ
+            const qList = Array.isArray(userQuestions) ? userQuestions : [String(userQuestions || '')];
+            const qLines = qList.flatMap(q => String(q).split('\n')).map(l => stripAcc(l).trim()).filter(l => l.length > 0);
+
+            let barDim = null;
+            let donutDim = null;
+
+            qLines.forEach(l => {
+                catCols.forEach(c => {
+                    const cn = stripAcc(c.label);
+                    const origN = stripAcc(c.name);
+                    const isMatch = l.includes(cn) || l.includes(origN) ||
+                        (cn.includes('cua hang') && l.includes('cua hang')) ||
+                        (cn.includes('khu vuc') && l.includes('khu vuc')) ||
+                        (cn.includes('kenh') && l.includes('kenh'));
+
+                    if (isMatch) {
+                        if (/cao nhat|thap nhat|xep hang|so sanh|hon|nhat/.test(l)) {
+                            if (!barDim) barDim = c;
+                        }
+                        if (/chiem phan lon|phan lon|ty trong|co cau|tong|dong gop/.test(l)) {
+                            if (!donutDim) donutDim = c;
+                        }
+                    }
+                });
+            });
+
+            if (!barDim) {
+                barDim = catCols.find(c => stripAcc(c.label).includes('cua hang')) || catCols[0] || null;
+            }
+            if (!donutDim) {
+                donutDim = catCols.find(c => c !== barDim && stripAcc(c.label).includes('khu vuc')) ||
+                           catCols.find(c => c !== barDim) ||
+                           catCols[1] || barDim;
+            }
+
             const charts = [];
 
             // 1. Biểu đồ đường xu hướng thời gian (Line Chart)
-            if (timeCols[0]) {
-                const tCol = timeCols[0].name;
-                const tLabel = timeCols[0].label;
+            const tColProfile = timeCols[0] || null;
+            if (tColProfile) {
+                const tCol = tColProfile.name;
+                const tLabel = tColProfile.label;
                 const timeMap = {};
                 rows.forEach(r => {
                     const key = String(r[tCol] !== undefined ? r[tCol] : 'N/A').trim();
@@ -2865,8 +2902,9 @@
                         id: "f1",
                         finding_id: "F1",
                         chart_type: "line",
-                        title: `1. Xu hướng biến động ${mLabel} theo ${tLabel}`,
-                        subtitle: `Theo dõi chu kỳ biến động ${mLabel} qua từng mốc ${tLabel}`,
+                        title: `1. Diễn Biến ${mLabel} Theo Chu Kỳ ${tLabel}`,
+                        subtitle: `Phân tích biến động tăng giảm và chuỗi thời gian bám sát yêu cầu người dùng`,
+                        agent_reason: `Agent trực quan hóa chu kỳ tăng giảm của ${mLabel} qua từng ${tLabel} để làm rõ xu hướng biến động.`,
                         labels: labels,
                         datasets: [{
                             label: mLabel,
@@ -2881,17 +2919,16 @@
                             `Mốc thấp nhất: '${labels[minIdx]}' (${formatVal(seriesData[minIdx])})`,
                             `Tổng tích lũy toàn kỳ: ${formatVal(sumVal)}`
                         ],
-                        insight: `${mLabel} ghi nhận biến động ${growthSign}${growthPct}% từ mốc ${labels[0]} đến ${labels[labels.length - 1]}, đạt đỉnh tại ${labels[maxIdx]} (${formatVal(seriesData[maxIdx])}).`,
-                        action: `Duy trì đà tăng trưởng và phân bổ nguồn lực cân đối theo từng chu kỳ ${tLabel}.`
+                        insight: `${mLabel} ghi nhận biến động ${growthSign}${growthPct}% từ mốc ${labels[0]} đến ${labels[labels.length - 1]}, đạt đỉnh tại '${labels[maxIdx]}' (${formatVal(seriesData[maxIdx])}).`,
+                        action: `Chủ động nguồn lực chuẩn bị đón đầu các đợt cao điểm như '${labels[maxIdx]}' và kích cầu tại các mốc đáy.`
                     });
                 }
             }
 
-            // 2. Biểu đồ cột xếp hạng so sánh theo Dim 1 (Bar Chart)
-            const dim1 = catCols[0];
-            if (dim1) {
-                const dCol = dim1.name;
-                const dLabel = dim1.label;
+            // 2. Biểu đồ cột xếp hạng so sánh theo barDim (Bar Chart - Cửa hàng nào cao nhất)
+            if (barDim) {
+                const dCol = barDim.name;
+                const dLabel = barDim.label;
                 const groupMap = {};
                 rows.forEach(r => {
                     const key = String(r[dCol] !== undefined ? r[dCol] : 'Khác').trim();
@@ -2908,7 +2945,7 @@
                     });
                     sorted = Object.entries(countMap).sort((a, b) => b[1] - a[1]);
                 }
-                const topItems = sorted.slice(0, 10);
+                const topItems = sorted.slice(0, 12);
                 const labels = topItems.map(x => x[0]);
                 const seriesData = topItems.map(x => Math.round(x[1]));
 
@@ -2916,13 +2953,16 @@
                     const leader = topItems[0];
                     const laggard = topItems[topItems.length - 1];
                     const ratio = laggard[1] > 0 ? (leader[1] / laggard[1]).toFixed(1) : '1.0';
+                    const totalSum = sorted.reduce((acc, curr) => acc + curr[1], 0);
+                    const leaderPct = totalSum > 0 ? ((leader[1] / totalSum) * 100).toFixed(1) : '0';
 
                     charts.push({
                         id: "f2",
                         finding_id: "F2",
                         chart_type: "bar",
-                        title: `2. Xếp hạng so sánh ${mLabel} theo ${dLabel}`,
-                        subtitle: `Đối chiếu quy mô đóng góp giữa các ${dLabel} hàng đầu`,
+                        title: `2. So Sánh ${mLabel} Theo ${dLabel}`,
+                        subtitle: `Xác định đơn vị dẫn đầu (${dLabel} cao nhất) theo yêu cầu người dùng`,
+                        agent_reason: `Agent so sánh trực diện quy mô ${mLabel} giữa các ${dLabel} để xếp hạng cao nhất và thấp nhất.`,
                         labels: labels,
                         datasets: [{
                             label: mLabel,
@@ -2934,19 +2974,18 @@
                         key_numbers: [
                             `Dẫn đầu: '${leader[0]}' (${formatVal(leader[1])})`,
                             `Tụt hậu: '${laggard[0]}' (${formatVal(laggard[1])})`,
-                            `Mức độ chênh lệch: ${ratio} lần`
+                            `Chênh lệch: ${ratio} lần (Chiếm ${leaderPct}% tổng)`
                         ],
-                        insight: `'${leader[0]}' chi phối phần lớn quy mô ${mLabel}, tạo khoảng cách gấp ${ratio} lần so với '${laggard[0]}'.`,
-                        action: `Chuẩn hóa quy trình từ '${leader[0]}' và hỗ trợ nguồn lực tập trung cho nhóm tụt hậu.`
+                        insight: `Đơn vị '${leader[0]}' dẫn đầu với ${formatVal(leader[1])} (chiếm ${leaderPct}% tổng thể), cao gấp ${ratio} lần so với '${laggard[0]}'.`,
+                        action: `Chuyển giao kinh nghiệm thực hành xuất sắc từ '${leader[0]}' sang nhóm '${laggard[0]}' để san phẳng độ lệch hiệu quả.`
                     });
                 }
             }
 
-            // 3. Biểu đồ tròn cơ cấu tỷ trọng theo Dim 2 (Doughnut Chart)
-            const dim2 = catCols.length > 1 ? catCols[1] : (dim1 && dim1.nunique <= 8 ? dim1 : null);
-            if (dim2) {
-                const dCol2 = dim2.name;
-                const dLabel2 = dim2.label;
+            // 3. Biểu đồ tròn cơ cấu tỷ trọng theo donutDim (Doughnut Chart - Khu vực nào chiếm phần lớn)
+            if (donutDim) {
+                const dCol2 = donutDim.name;
+                const dLabel2 = donutDim.label;
                 const groupMap2 = {};
                 let totalVal2 = 0;
                 rows.forEach(r => {
@@ -2966,7 +3005,7 @@
                     sorted2 = Object.entries(countMap2).sort((a, b) => b[1] - a[1]);
                     totalVal2 = rows.length;
                 }
-                const top5 = sorted2.slice(0, 5);
+                const top5 = sorted2.slice(0, 6);
                 const labels2 = top5.map(x => x[0]);
                 const seriesData2 = top5.map(x => Math.round(x[1]));
 
@@ -2978,49 +3017,86 @@
                         id: "f3",
                         finding_id: "F3",
                         chart_type: "doughnut",
-                        title: `3. Cơ cấu tỷ trọng ${mLabel} theo ${dLabel2}`,
-                        subtitle: `Tỷ lệ đóng góp thực tế trên từng phân nhóm ${dLabel2}`,
+                        title: `3. Cơ Cấu Tỷ Trọng ${mLabel} Theo ${dLabel2}`,
+                        subtitle: `Xác định ${dLabel2} chiếm phần lớn tổng nguồn thu theo yêu cầu người dùng`,
+                        agent_reason: `Agent tính toán cơ cấu phần trăm đóng góp của từng ${dLabel2} để giải đáp nhóm chiếm phần lớn nguồn thu.`,
                         labels: labels2,
                         datasets: [{
                             label: mLabel,
                             data: seriesData2,
-                            backgroundColor: ['#2C5E82', '#6BA3C7', '#92C3E1', '#BBE4F6', '#E0F1FC']
+                            backgroundColor: ['#2C5E82', '#6BA3C7', '#92C3E1', '#BBE4F6', '#E0F1FC', '#FCF8E7']
                         }],
                         series: [{ name: mLabel, data: seriesData2 }],
                         key_numbers: [
-                            `Tỷ trọng lớn nhất: '${top5[0][0]}' (${top1Pct}%)`,
+                            `Chiếm phần lớn: '${top5[0][0]}' (${top1Pct}%)`,
                             `Top 2 chi phối: ${top2Pct}% quy mô`,
-                            `Tổng số phân nhóm: ${sorted2.length}`
+                            `Tổng quy mô toàn bộ: ${formatVal(totalVal2)}`
                         ],
-                        insight: `'${top5[0][0]}' dẫn đầu cơ cấu với ${top1Pct}% tổng ${mLabel}, cần mở rộng các phân nhóm tiềm năng khác.`,
-                        action: `Đa dạng hóa danh mục để giảm thiểu rủi ro phụ thuộc tập trung vào phân khúc chủ lực.`
+                        insight: `'${top5[0][0]}' dẫn đầu cơ cấu khi chiếm ${top1Pct}% tổng ${mLabel} (${formatVal(top5[0][1])}), là động lực đóng góp chủ đạo của toàn hệ thống.`,
+                        action: `Tối ưu hóa chuỗi cung ứng tại '${top5[0][0]}' đồng thời kích hoạt gói tăng tốc cho các ${dLabel2} còn lại để mở rộng quy mô bền vững.`
                     });
                 }
             }
 
-            // Fallback nếu thiếu biểu đồ
-            if (charts.length === 0) {
-                charts.push({
-                    id: "f1",
-                    finding_id: "F1",
-                    chart_type: "bar",
-                    title: `1. Phân bố tổng quan ${mLabel}`,
-                    subtitle: `Quy mô ghi nhận từ tệp dữ liệu đã tải`,
-                    labels: origCols.slice(0, 5).map(c => cleanLabel(c)),
-                    datasets: [{
-                        label: "Số lượng bản ghi",
-                        data: [rows.length, rows.length, rows.length, rows.length, rows.length],
-                        backgroundColor: '#2C5E82'
-                    }],
-                    series: [{ name: "Số lượng bản ghi", data: [rows.length, rows.length, rows.length, rows.length, rows.length] }],
-                    key_numbers: [
-                        `Tổng số bản ghi: ${rows.length}`,
-                        `Số cột thực tế: ${origCols.length}`,
-                        `Độ hoàn thiện: 100%`
-                    ],
-                    insight: "Dữ liệu được nạp thành công và sẵn sàng cho các phân tích chi tiết.",
-                    action: "Bổ sung thêm các cột phân loại để kích hoạt hệ thống biểu đồ chuyên sâu."
-                });
+            // 4. Biểu đồ cột kép đối chiếu 2 chỉ số tài chính (Multi-bar Chart - Lợi nhuận vs Chi phí)
+            const metricProf = numCols.find(c => /(loi_nhuan|profit|lai)/.test(stripAcc(c.label)));
+            const metricCost = numCols.find(c => /(chi_phi|cost|gia_von|cogs|thue)/.test(stripAcc(c.label)));
+            const refDim = barDim || catCols[0];
+
+            if (refDim && (metricProf || metricCost || numCols.length > 1)) {
+                const m1 = metricProf || numCols[0];
+                const m2 = metricCost || (numCols.find(c => c !== m1) || numCols[0]);
+
+                if (m1 && m2 && m1 !== m2) {
+                    const dimCol = refDim.name;
+                    const topUnits = (charts[1] ? charts[1].labels : []).slice(0, 10);
+                    const m1Map = {}, m2Map = {};
+
+                    rows.forEach(r => {
+                        const k = String(r[dimCol] !== undefined ? r[dimCol] : 'Khác').trim();
+                        m1Map[k] = (m1Map[k] || 0) + getValFromRow(r, m1.name);
+                        m2Map[k] = (m2Map[k] || 0) + getValFromRow(r, m2.name);
+                    });
+
+                    const targetUnits = topUnits.length > 0 ? topUnits : Object.keys(m1Map).slice(0, 10);
+                    const d1 = targetUnits.map(k => Math.round(m1Map[k] || 0));
+                    const d2 = targetUnits.map(k => Math.round(m2Map[k] || 0));
+
+                    charts.push({
+                        id: "f4",
+                        finding_id: "F4",
+                        chart_type: "bar",
+                        title: `4. Đối Chiếu ${m1.label} vs ${m2.label} Theo ${refDim.label}`,
+                        subtitle: `Đo lường hiệu quả kinh doanh và mối quan hệ định lượng đa chiều`,
+                        agent_reason: `Agent đối chiếu song song ${m1.label} và ${m2.label} theo từng ${refDim.label} để phát hiện điểm nghẽn biên lợi nhuận.`,
+                        labels: targetUnits,
+                        datasets: [
+                            {
+                                label: m1.label,
+                                data: d1,
+                                backgroundColor: '#2C5E82',
+                                borderColor: '#0F2942'
+                            },
+                            {
+                                label: m2.label,
+                                data: d2,
+                                backgroundColor: '#92C3E1',
+                                borderColor: '#2C5E82'
+                            }
+                        ],
+                        series: [
+                            { name: m1.label, data: d1 },
+                            { name: m2.label, data: d2 }
+                        ],
+                        key_numbers: [
+                            `Tổng ${m1.label}: ${formatVal(d1.reduce((a, b) => a + b, 0))}`,
+                            `Tổng ${m2.label}: ${formatVal(d2.reduce((a, b) => a + b, 0))}`,
+                            `Đơn vị phân tích: ${targetUnits.length} ${refDim.label}`
+                        ],
+                        insight: `Tương quan giữa ${m1.label} và ${m2.label} thể hiện rõ sự phân hóa hiệu quả kinh doanh giữa các ${refDim.label}.`,
+                        action: `Kiểm soát chặt chẽ ${m2.label} tại các đơn vị có tỷ lệ chi phí cao để bảo toàn biên lợi nhuận.`
+                    });
+                }
             }
 
             return charts;
@@ -4316,7 +4392,7 @@
             // Nếu người dùng không nhập yêu cầu riêng, mặc định áp dụng giải pháp theo đề xuất
             if (!userReq) {
                 if (sm && sm.negative_profit_rows > 0) {
-                    userReq = 'Gắn nhãn Cảnh báo lỗ & Biên lãi %';
+                    userReq = 'Đồng ý làm sạch theo quy tắc đề xuất';
                 } else {
                     userReq = 'Đồng ý làm sạch theo quy tắc đề xuất';
                 }
@@ -4866,35 +4942,31 @@
             if (v === null || v === undefined) return `<td class="py-2 px-3 text-slate-400">-</td>`;
             const colLower = String(c).toLowerCase();
             
-            // 1. Cột trạng thái lợi nhuận (Không dùng icon, dùng badge chữ thuần túy)
-            if (colLower.includes('trang_thai') || colLower.includes('trạng_thái') || String(v).includes('Cảnh báo lỗ') || String(v).includes('Có lãi')) {
-                if (String(v).includes('Cảnh báo lỗ') || String(v).includes('lỗ')) {
-                    return `<td class="py-2 px-3"><span class="px-2.5 py-1 rounded-md text-[11px] font-bold bg-rose-100 text-rose-700 border border-rose-300">Cảnh báo lỗ</span></td>`;
+            // 1. Cột trạng thái lợi nhuận: Dùng nhãn tài chính chuẩn mực, không báo đỏ như lỗi
+            if (colLower.includes('trang_thai') || colLower.includes('trạng_thái') || String(v).includes('Cảnh báo lỗ') || String(v).includes('Có lãi') || String(v).includes('Lợi nhuận âm')) {
+                if (String(v).includes('Cảnh báo lỗ') || String(v).includes('lỗ') || String(v).includes('âm')) {
+                    return `<td class="py-2 px-3"><span class="px-2.5 py-1 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-300">Lợi nhuận âm</span></td>`;
                 }
                 return `<td class="py-2 px-3"><span class="px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">Có lãi</span></td>`;
             }
             
-            // 2. Cột biên lợi nhuận %
+            // 2. Cột biên lợi nhuận %: Giữ định dạng số tài chính thanh lịch, không bôi đỏ cảnh báo lỗi
             if (colLower.includes('%') || colLower.includes('bien_loi_nhuan') || colLower.includes('biên_lợi_nhuận')) {
                 const num = typeof v === 'number' ? v : parseFloat(v);
                 if (!isNaN(num)) {
                     if (num < 0) {
-                        return `<td class="py-2 px-3 font-bold text-rose-600 bg-rose-50/80 rounded">${num}%</td>`;
+                        return `<td class="py-2 px-3 font-semibold text-slate-700">${num}%</td>`;
                     }
                     return `<td class="py-2 px-3 font-bold text-emerald-700">${num}%</td>`;
                 }
                 return `<td class="py-2 px-3">${v}</td>`;
             }
             
-            // 3. Cột số tiền hoặc số âm
+            // 3. Cột số tiền hoặc số âm: Hiển thị chuẩn mực theo format số tiền, không bôi nền đỏ
             const isMoney = colLower.includes('vnd') || colLower.includes('rev') || colLower.includes('profit') || colLower.includes('cost') || colLower.includes('tien') || colLower.includes('nhuận') || colLower.includes('phí') || colLower.includes('thu') || colLower.includes('vốn') || colLower.includes('giá') || colLower.includes('lợi');
             if (typeof v === 'number') {
-                if (v < 0) {
-                    const formatted = isMoney ? formatVND(v) : v.toLocaleString('vi-VN');
-                    return `<td class="py-2 px-3 font-bold text-rose-600 bg-rose-50/80 rounded">${formatted}</td>`;
-                }
                 const formatted = isMoney ? formatVND(v) : v.toLocaleString('vi-VN');
-                return `<td class="py-2 px-3 text-slate-800">${formatted}</td>`;
+                return `<td class="py-2 px-3 font-medium text-slate-800">${formatted}</td>`;
             }
             
             return `<td class="py-2 px-3 text-slate-800">${v}</td>`;
@@ -4945,7 +5017,7 @@
                     chips.push({ text: 'Xóa bản sao, giữ lại bản gốc', val: 'Xóa các bản ghi trùng lặp, giữ lại 1 bản gốc' });
                     addedTags.add('DUP');
                 } else if (tag.includes('LỢI NHUẬN ÂM') && !addedTags.has('NEG')) {
-                    chips.push({ text: 'Gắn nhãn Cảnh báo lỗ & Tính biên lãi %', val: 'Gắn nhãn Cảnh báo lỗ và tính biên lãi %' });
+                    chips.push({ text: 'Chuẩn hóa định dạng & Tính biên lãi %', val: 'Chuẩn hóa định dạng và tính biên lãi %' });
                     addedTags.add('NEG');
                 } else if (tag.includes('DOANH THU ÂM') && !addedTags.has('REV_NEG')) {
                     chips.push({ text: 'Hiệu chỉnh doanh thu về số dương', val: 'Hiệu chỉnh các giá trị doanh thu âm về số dương' });
@@ -5121,10 +5193,14 @@ async function submitStep2DirectCleaning() {
             const actualMissing = (q && typeof q.missing_cells === 'number') ? q.missing_cells : (sm ? (sm.missing_before || 0) : 0);
             const actualDup = (q && typeof q.duplicate_rows === 'number') ? q.duplicate_rows : (sm ? (sm.duplicates_removed || 0) : 0);
 
-            if (sm && sm.negative_profit_rows > 0) {
-                document.getElementById('q-missing').innerHTML = `<span class="text-rose-600 font-bold">${sm.negative_profit_rows} dòng kinh doanh lỗ</span>`;
+            // Thẻ 1 chỉ phản ánh dữ liệu khuyết thiếu (NaN / Null) thực tế, không coi lợi nhuận âm là lỗi làm sạch
+            const missingMethodEl = document.getElementById('q-missing-method');
+            if (actualMissing > 0) {
+                document.getElementById('q-missing').innerText = `Đã xử lý ${actualMissing} ô trống`;
+                if (missingMethodEl) missingMethodEl.innerText = 'Điền Median / Mode';
             } else {
-                document.getElementById('q-missing').innerText = actualMissing > 0 ? `Đã xử lý ${actualMissing} ô trống` : 'Dữ liệu đầy đủ 100%';
+                document.getElementById('q-missing').innerText = '0 ô trống (100% đầy đủ)';
+                if (missingMethodEl) missingMethodEl.innerText = 'Dữ liệu nguyên vẹn';
             }
             document.getElementById('q-duplicates').innerText = actualDup > 0 ? `Đã xóa ${actualDup} dòng trùng` : 'Không có trùng lặp';
 
@@ -5133,9 +5209,6 @@ async function submitStep2DirectCleaning() {
                 if (data.user_request_applied && data.user_request_applied !== 'Đã làm sạch lại theo quy tắc') {
                     methodBadge.className = 'text-[10px] bg-pastel-100 text-pastel-700 font-bold px-2.5 py-0.5 rounded-full border border-pastel-300';
                     methodBadge.innerText = 'Theo yêu cầu chỉnh sửa';
-                } else if (sm && sm.negative_profit_rows > 0) {
-                    methodBadge.className = 'text-[10px] bg-rose-100 text-rose-700 font-bold px-2.5 py-0.5 rounded-full border border-rose-300';
-                    methodBadge.innerText = `Có ${sm.negative_profit_rows} dòng kinh doanh lỗ (Đã gắn nhãn kiểm toán)`;
                 } else {
                     methodBadge.className = 'text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2.5 py-0.5 rounded-full border border-emerald-300';
                     methodBadge.innerText = 'Đạt chuẩn';
@@ -5466,50 +5539,50 @@ async function submitStep2DirectCleaning() {
                     const evList = c.evidence || [];
 
                     return `
-                    <div class="p-5 sm:p-6 rounded-2xl bg-white border border-slate-200 hover:border-[#2C5E82]/40 shadow-2xs space-y-3.5 transition">
-                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 pb-3">
+                    <div class="p-5 sm:p-6 rounded-2xl bg-white border border-slate-200 hover:border-[#2C5E82]/40 shadow-2xs space-y-4 transition">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
                             <div class="flex items-center gap-2.5 flex-wrap">
-                                <span class="text-[10px] font-black uppercase px-2.5 py-1 rounded-md bg-[#E0F1FC] text-[#1E435E] border border-[#BBE4F6] shrink-0">
+                                <span class="text-xs font-black uppercase px-3 py-1.5 rounded-lg bg-[#E0F1FC] text-[#1E435E] border border-[#BBE4F6] shrink-0">
                                     Nguyên Nhân [${c.id}] &bull; Nguồn: [${fRefs}]
                                 </span>
-                                <h5 class="text-sm sm:text-base font-extrabold text-slate-900 leading-snug">
+                                <h5 class="text-base sm:text-lg font-black text-slate-900 leading-snug">
                                     ${c.id}. ${c.problem}
                                 </h5>
                             </div>
-                            <span class="text-xs font-black text-[#1E435E] bg-[#E0F1FC] px-3 py-1 rounded-lg border border-[#BBE4F6] shadow-2xs shrink-0 self-start sm:self-auto">
+                            <span class="text-xs sm:text-sm font-black text-[#1E435E] bg-[#E0F1FC] px-3.5 py-1.5 rounded-lg border border-[#BBE4F6] shadow-2xs shrink-0 self-start sm:self-auto">
                                 Chẩn đoán từ dữ liệu thật
                             </span>
                         </div>
 
-                        <!-- 2 Cột Cân Đối: Bằng chứng & Nguyên nhân gốc rễ -->
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs">
+                        <!-- 2 Cột Cân Đối: Bằng chứng & Nguyên nhân gốc rễ (Chữ to rõ ràng) -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <!-- Bằng chứng từ dữ liệu -->
-                            <div class="p-3.5 sm:p-4 rounded-xl bg-slate-50 border border-slate-200/90 space-y-2 flex flex-col justify-between">
-                                <div class="space-y-1.5">
-                                    <span class="font-extrabold text-[#1E435E] text-xs block mb-1">
+                            <div class="p-4 sm:p-5 rounded-xl bg-slate-50 border border-slate-200/90 space-y-3 flex flex-col justify-between">
+                                <div class="space-y-2">
+                                    <span class="font-black text-[#1E435E] text-sm sm:text-[15px] block">
                                         2 Bằng chứng từ dữ liệu:
                                     </span>
-                                    <ul class="space-y-1.5 text-slate-700 leading-relaxed font-medium">
-                                        ${evList.map(ev => `<li class="flex items-start gap-1.5"><span class="text-[#2C5E82] font-bold shrink-0">&bull;</span><span>${ev}</span></li>`).join('')}
+                                    <ul class="space-y-2 text-slate-800 leading-relaxed font-semibold text-xs sm:text-sm">
+                                        ${evList.map(ev => `<li class="flex items-start gap-2"><span class="text-[#2C5E82] font-black text-sm shrink-0 mt-0.5">&bull;</span><span>${ev}</span></li>`).join('')}
                                     </ul>
                                 </div>
-                                <div class="text-[10px] text-slate-500 pt-1.5 border-t border-slate-200/60 flex items-center justify-between font-mono">
+                                <div class="text-xs text-slate-600 pt-2 border-t border-slate-200/80 flex items-center justify-between font-mono font-bold">
                                     <span>Đối soát: [${fRefs}]</span>
-                                    <span class="text-[#2C5E82] font-semibold">Dữ liệu thực nghiệm</span>
+                                    <span class="text-[#2C5E82] font-bold">Dữ liệu thực nghiệm</span>
                                 </div>
                             </div>
 
                             <!-- Nguyên nhân cốt lõi cơ chế/hệ thống -->
-                            <div class="p-3.5 sm:p-4 rounded-xl bg-[#F4F9FD] border border-[#BBE4F6] space-y-2 flex flex-col justify-between">
-                                <div class="space-y-1.5">
-                                    <span class="font-extrabold text-[#1E435E] text-xs block mb-1">
+                            <div class="p-4 sm:p-5 rounded-xl bg-[#F4F9FD] border border-[#BBE4F6] space-y-3 flex flex-col justify-between">
+                                <div class="space-y-2">
+                                    <span class="font-black text-[#1E435E] text-sm sm:text-[15px] block">
                                         Nguyên nhân gốc rễ (Root Cause):
                                     </span>
-                                    <p class="text-slate-800 leading-relaxed font-bold text-xs bg-white/90 p-2.5 rounded-lg border border-[#BBE4F6]/70">
+                                    <p class="text-slate-900 leading-relaxed font-extrabold text-sm sm:text-[14.5px] bg-white/95 p-3 rounded-xl border border-[#BBE4F6] shadow-2xs">
                                         ${c.root_cause}
                                     </p>
                                 </div>
-                                <div class="text-[10px] text-[#2C5E82] pt-1.5 border-t border-[#BBE4F6]/60 font-semibold">
+                                <div class="text-xs sm:text-[12.5px] text-[#1E435E] pt-2 border-t border-[#BBE4F6]/70 font-bold">
                                     Trọng tâm can thiệp: Tầng quy trình vận hành &amp; cơ chế kiểm soát
                                 </div>
                             </div>
@@ -5543,61 +5616,59 @@ async function submitStep2DirectCleaning() {
                         "Cập nhật bảng theo dõi hiệu suất hàng tuần để can thiệp kịp thời."
                     ];
 
-                    const solTitle = s.title || s.name || `Chuẩn hóa quy trình vận hành và nâng cao hiệu suất`;
-                    const solPriority = s.priority || (idx === 0 ? 'Làm ngay' : 'Ưu tiên cao');
-                    const solRaci = s.raci || s.owner || 'R: Trưởng nhóm kinh doanh | A: Giám đốc Vận hành | C: Bộ phận QA | I: Toàn bộ nhân viên';
-                    const solKpi = s.kpi || s.kpi_target || 'Thu hẹp khoảng cách hiệu suất giữa các nhóm xuống dưới 1.5 lần';
-                    const solImpact = s.expected_impact || s.impact || 'Ước tính cải thiện 15–20% hiệu suất vận hành toàn hệ thống';
-                    const solRisk = s.risk || 'Tâm lý ngại thay đổi; giải pháp: Gắn KPI vào đánh giá thi đua và thưởng năng suất định kỳ';
+                    const solTitle = (s.title && s.title !== 'undefined') ? s.title : ((s.name && s.name !== 'undefined') ? s.name : `Chuẩn hóa quy trình vận hành và nâng cao hiệu suất`);
+                    const solPriority = (s.priority && s.priority !== 'undefined') ? s.priority : (idx === 0 ? 'Làm ngay' : 'Ưu tiên cao');
+                    const solRaci = (s.raci && s.raci !== 'undefined') ? s.raci : ((s.owner && s.owner !== 'undefined') ? s.owner : 'R: Trưởng phòng Kinh doanh | A: Giám đốc Vận hành | C: Bộ phận QA | I: Toàn bộ nhân viên');
+                    const solKpi = (s.kpi && s.kpi !== 'undefined') ? s.kpi : ((s.kpi_target && s.kpi_target !== 'undefined') ? s.kpi_target : 'Thu hẹp khoảng cách hiệu suất giữa các nhóm xuống dưới 1.5 lần');
+                    const solImpact = (s.expected_impact && s.expected_impact !== 'undefined') ? s.expected_impact : ((s.impact && s.impact !== 'undefined') ? s.impact : 'Ước tính cải thiện 15–20% hiệu suất vận hành toàn hệ thống');
+                    const solRisk = (s.risk && s.risk !== 'undefined') ? s.risk : 'Tâm lý ngại thay đổi; giải pháp: Gắn KPI vào đánh giá thi đua và thưởng năng suất định kỳ';
 
                     return `
-                    <div class="p-5 sm:p-6 rounded-2xl bg-white border border-slate-200 hover:border-[#2C5E82]/40 shadow-2xs space-y-3.5 transition">
-                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                    <div class="p-5 sm:p-6 rounded-2xl bg-white border border-slate-200 hover:border-[#2C5E82]/40 shadow-2xs space-y-4 transition">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
                             <div class="flex items-center gap-2.5 flex-wrap">
-                                <span class="text-[10px] font-black uppercase px-2.5 py-1 rounded-md bg-[#E0F1FC] text-[#1E435E] border border-[#BBE4F6] shrink-0">
+                                <span class="text-xs font-black uppercase px-3 py-1.5 rounded-lg bg-[#E0F1FC] text-[#1E435E] border border-[#BBE4F6] shrink-0">
                                     [${s.id || ('S' + (idx + 1))}] &bull; Xử lý [${cRefs}] &bull; ${solPriority}
                                 </span>
-                                <h5 class="text-sm sm:text-base font-extrabold text-slate-900 leading-snug">
+                                <h5 class="text-base sm:text-lg font-black text-slate-900 leading-snug">
                                     ${s.id || ('S' + (idx + 1))}. ${solTitle}
                                 </h5>
                             </div>
-                            <span class="text-xs font-bold text-[#1E435E] bg-slate-100 px-3 py-1 rounded-lg border border-slate-200 shrink-0 self-start sm:self-auto">
+                            <span class="text-xs sm:text-sm font-black text-[#1E435E] bg-slate-100 px-3.5 py-1.5 rounded-lg border border-slate-200 shrink-0 self-start sm:self-auto">
                                 Lộ trình: 30 / 60 / 90 ngày
                             </span>
                         </div>
 
-                        <!-- 3-5 Bước triển khai cụ thể -->
-                        <div class="space-y-1.5 text-xs text-slate-700 bg-slate-50 p-3.5 rounded-xl border border-slate-200/90">
-                            <span class="font-extrabold text-[#1E435E] block text-[11px] uppercase tracking-wider mb-1">Các bước hành động cụ thể (Việc – Người làm – Hạn):</span>
-                            ${stepLines.map(line => `<div class="flex items-start gap-1.5"><span class="text-[#2C5E82] font-bold shrink-0">&bull;</span><span>${line}</span></div>`).join('')}
+                        <!-- 3-5 Bước triển khai cụ thể (Chữ to rõ ràng) -->
+                        <div class="space-y-2 text-xs sm:text-sm text-slate-800 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                            <span class="font-black text-[#1E435E] block text-xs sm:text-sm uppercase tracking-wider mb-1.5">Các bước hành động cụ thể (Việc – Người làm – Hạn):</span>
+                            ${stepLines.map(line => `<div class="flex items-start gap-2"><span class="text-[#2C5E82] font-black text-sm sm:text-base shrink-0 mt-0.5">&bull;</span><span class="font-semibold leading-relaxed">${line}</span></div>`).join('')}
                         </div>
 
-                        <!-- RACI, KPI, Kỳ vọng & Rủi ro (Đảm bảo 100% không bao giờ undefined) -->
-                        <div class="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs pt-1">
-                            <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
-                                <span class="font-bold text-[#1E435E]">Phân nhiệm RACI:</span>
-                                <span class="text-slate-700 ml-1 font-medium">${solRaci}</span>
+                        <!-- RACI, KPI, Kỳ vọng & Rủi ro: CHỮ TO RÕ RÀNG, DỄ ĐỌC VÀ KHÔNG BỊ TRÀN -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3.5 text-xs sm:text-sm pt-1">
+                            <div class="p-3.5 sm:p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
+                                <span class="font-black text-[#1E435E] text-xs sm:text-sm block">Phân nhiệm RACI:</span>
+                                <span class="text-slate-900 font-bold text-xs sm:text-[13.5px] leading-relaxed block">${solRaci}</span>
                             </div>
-                            <div class="p-2.5 rounded-lg bg-[#E0F1FC] border border-[#BBE4F6]">
-                                <span class="font-bold text-[#1E435E]">Chỉ số KPI cam kết:</span>
-                                <span class="text-[#1E435E] ml-1 font-semibold">${solKpi}</span>
+                            <div class="p-3.5 sm:p-4 rounded-xl bg-[#E0F1FC] border border-[#BBE4F6] space-y-1">
+                                <span class="font-black text-[#1E435E] text-xs sm:text-sm block">Chỉ số KPI cam kết:</span>
+                                <span class="text-[#1E435E] font-extrabold text-xs sm:text-[13.5px] leading-relaxed block">${solKpi}</span>
                             </div>
-                            <div class="p-2.5 rounded-lg bg-[#E0F1FC]/60 border border-[#BBE4F6]">
-                                <span class="font-bold text-[#1E435E]">Tác động kỳ vọng:</span>
-                                <span class="text-slate-800 ml-1 font-medium">${solImpact}</span>
+                            <div class="p-3.5 sm:p-4 rounded-xl bg-[#E0F1FC]/70 border border-[#BBE4F6] space-y-1">
+                                <span class="font-black text-[#1E435E] text-xs sm:text-sm block">Tác động kỳ vọng:</span>
+                                <span class="text-slate-900 font-bold text-xs sm:text-[13.5px] leading-relaxed block">${solImpact}</span>
                             </div>
-                            <div class="p-2.5 rounded-lg bg-[#FBF8E7] border border-[#BBE4F6]">
-                                <span class="font-bold text-[#1E435E]">Rủi ro & giải pháp giảm thiểu:</span>
-                                <span class="text-slate-800 ml-1 font-medium">${solRisk}</span>
+                            <div class="p-3.5 sm:p-4 rounded-xl bg-[#FBF8E7] border border-[#BBE4F6] space-y-1">
+                                <span class="font-black text-[#1E435E] text-xs sm:text-sm block">Rủi ro & giải pháp giảm thiểu:</span>
+                                <span class="text-slate-900 font-bold text-xs sm:text-[13.5px] leading-relaxed block">${solRisk}</span>
                             </div>
                         </div>
                     </div>`;
                 }).join('');
             }
         }
-
-
-                // =========================================================================
+// =========================================================================
         // HÀM BÁO CÁO KẾT QUẢ BƯỚC 5: MỤC 3 KẾT LUẬN & ĐỀ XUẤT, MỤC 4 BẢNG KPI THỰC TẾ
         // =========================================================================
         function renderReportSection3And4(data) {
@@ -5758,12 +5829,22 @@ async function submitStep2DirectCleaning() {
                         if (!owner || owner === 'undefined') owner = (idx === 0) ? 'Giám Đốc Thương Mại (CCO)' : (idx === 1 ? 'Giám Đốc Tài Chính (CFO)' : 'Giám Đốc Vận Hành (COO)');
 
                         return `
-                            <tr class="border-b border-pastel-200 bg-white hover:bg-pastel-50 transition text-xs">
-                                <td class="py-3 px-4 font-bold text-slate-900">${metric}</td>
-                                <td class="py-3 px-4 text-right text-slate-600 font-semibold">${current}</td>
-                                <td class="py-3 px-4 text-right font-extrabold text-pastel-950 bg-pastel-100/70">${target}</td>
-                                <td class="py-3 px-4 text-center"><span class="px-2.5 py-1 rounded-full bg-pastel-100 text-pastel-900 border border-pastel-300 font-bold text-[10px]">${timeline}</span></td>
-                                <td class="py-3 px-4 font-semibold text-slate-800">${owner}</td>
+                            <tr class="border-b border-pastel-150 bg-white hover:bg-pastel-50/60 transition">
+                                <td class="py-3 px-3.5 align-middle">
+                                    <div class="font-bold text-slate-900 text-[12px] leading-snug">${metric}</div>
+                                </td>
+                                <td class="py-3 px-3 align-middle text-right whitespace-nowrap">
+                                    <span class="font-extrabold text-slate-900 text-[12.5px] font-mono tracking-tight">${current}</span>
+                                </td>
+                                <td class="py-3 px-3.5 align-middle">
+                                    <div class="font-bold text-pastel-950 text-[11.5px] leading-relaxed bg-pastel-50/70 p-2 rounded-lg border border-pastel-200/80">${target}</div>
+                                </td>
+                                <td class="py-3 px-3 align-middle text-center whitespace-nowrap">
+                                    <span class="inline-block px-2.5 py-1 rounded-full bg-pastel-100 text-pastel-900 border border-pastel-300 font-bold text-[10px] tracking-tight">${timeline}</span>
+                                </td>
+                                <td class="py-3 px-3.5 align-middle">
+                                    <span class="font-semibold text-slate-700 text-[11.5px] leading-snug block">${owner}</span>
+                                </td>
                             </tr>
                         `;
                     }).join('');
@@ -6245,9 +6326,36 @@ async function submitStep2DirectCleaning() {
                 if (res.ok) {
                     const data = await res.json();
                     applyBackendPipelineResult(data);
+                } else {
+                    if (window.latestBackendData) {
+                        window.latestBackendData.chosen_direction = primaryDirection;
+                        if (customQuery) window.latestBackendData.custom_query = customQuery;
+                    }
                 }
             } catch (err) {
-                console.error('Error analyzing direction:', err);
+                console.error('Error analyzing direction (fallback to client-side):', err);
+                // CLIENT-SIDE ENGINE CHO VERCEL & OFFLINE
+                const rows = window.cleanedDataRows || (window.latestBackendData && (window.latestBackendData.full_data || window.latestBackendData.cleaned_preview)) || [];
+                if (rows.length > 0) {
+                    const kpis = (window.latestBackendData && window.latestBackendData.kpis) ? window.latestBackendData.kpis : {};
+                    const effectiveQuery = customQuery || (window.latestBackendData && window.latestBackendData.custom_query) || primaryDirection;
+                    const clientRichCharts = generateClientSideRichCharts(rows, [effectiveQuery], profile.company_name);
+                    const clientCS = generateClientSideCausesAndSolutions(clientRichCharts, kpis, rows, effectiveQuery);
+                    const clientReport = generateClientSideStep5Report(clientRichCharts, clientCS.causes, clientCS.solutions, kpis);
+                    const clientStep3Summary = generateClientSideStep3Summary(clientRichCharts);
+
+                    const fallbackData = {
+                        ...(window.latestBackendData || {}),
+                        chosen_direction: primaryDirection,
+                        custom_query: customQuery || (window.latestBackendData ? window.latestBackendData.custom_query : ''),
+                        rich_charts: clientRichCharts,
+                        step3_summary: clientStep3Summary,
+                        structured_causes: clientCS.causes,
+                        structured_solutions: clientCS.solutions,
+                        step5_report: clientReport
+                    };
+                    applyBackendPipelineResult(fallbackData);
+                }
             }
 
             closeAnalysisDirectionModal();
@@ -6488,11 +6596,40 @@ async function submitStep2DirectCleaning() {
                 `3. Cơ cấu tỷ trọng và điểm nghẽn: Cần phân bổ cân bằng nguồn lực. [Nguồn: F3]`
             ];
 
-            // Sinh HTML cho từng Finding F1..Fn tóm gọn, bỏ hướng dẫn đọc và nội dung đo lường
+            // Tự động tính lại key_numbers chính xác từ data thực tế nếu bị 0.0
+            validCharts.forEach(c => {
+                const ds0 = (c.datasets && c.datasets[0] && Array.isArray(c.datasets[0].data)) ? c.datasets[0].data : [];
+                const hasZeroInKeys = Array.isArray(c.key_numbers) && c.key_numbers.some(k => /0\.0\s*(Triệu|đ|₫)/i.test(k));
+                if (ds0.length > 0 && (!c.key_numbers || c.key_numbers.length === 0 || hasZeroInKeys)) {
+                    let maxI = 0, minI = 0, sumD = 0;
+                    ds0.forEach((v, i) => {
+                        const numV = Number(v) || 0;
+                        sumD += numV;
+                        if (numV > (Number(ds0[maxI]) || 0)) maxI = i;
+                        if (numV < (Number(ds0[minI]) || 0)) minI = i;
+                    });
+                    const maxLbl = (c.labels && c.labels[maxI]) ? c.labels[maxI] : 'Đỉnh kỳ';
+                    const minLbl = (c.labels && c.labels[minI]) ? c.labels[minI] : 'Đáy kỳ';
+                    const avgV = Math.round(sumD / ds0.length);
+                    const dsLabel = c.datasets[0].label || '';
+                    const unit = dsLabel.includes('Triệu') ? 'Triệu ₫' : (dsLabel.includes('đ') ? '₫' : 'đơn vị');
+                    c.key_numbers = [
+                        `Cao nhất: '${maxLbl}' đạt ${Number(ds0[maxI]).toLocaleString('vi-VN')} ${unit}`,
+                        `Thấp nhất: '${minLbl}' ghi nhận ${Number(ds0[minI]).toLocaleString('vi-VN')} ${unit}`,
+                        `Chênh lệch: ${(Number(ds0[maxI]) - Number(ds0[minI])).toLocaleString('vi-VN')} ${unit} (Bình quân: ${avgV.toLocaleString('vi-VN')} ${unit})`
+                    ];
+                }
+            });
+
+            // Lưu cache biểu đồ đã chuẩn hóa của Bước 3 để Bước 5 tái sử dụng đồng nhất 100%
+            window.step3RenderedChartsCache = JSON.parse(JSON.stringify(validCharts));
+            window.baseRichChartsSuite = validCharts;
+
+            // Sinh HTML cho từng Finding F1..Fn tóm gọn
             const chartsHTML = validCharts.map((c, idx) => {
                 const cleanTitle = (c.title || '').replace(/^\d+\.\s*/, '');
                 const fId = c.finding_id || `F${idx + 1}`;
-                const keysList = Array.isArray(c.key_numbers) ? c.key_numbers : [
+                const keysList = (Array.isArray(c.key_numbers) && c.key_numbers.length > 0) ? c.key_numbers : [
                     `Đơn vị chủ lực: '${c.labels ? c.labels[0] : 'N/A'}'`,
                     `Đơn vị thấp nhất: '${c.labels ? c.labels[c.labels.length-1] : 'N/A'}'`,
                     `Biến động biên độ đo lường`
@@ -7718,47 +7855,69 @@ async function submitStep2DirectCleaning() {
             const pastelColors = ['#92C3E1', '#A6D0F0', '#BBE4F6', '#FBF8E7', '#E0F1FC'];
             let chartsToRender = [];
 
-            // 1. NẠP TẤT CẢ BIỂU ĐỒ CỦA CÁC HƯỚNG MỞ RỘNG ĐÃ CHỌN Ở BƯỚC 3 (ĐẶT LÊN ĐẦU)
-            const activeResults = (window.activeDeepDiveResults && window.activeDeepDiveResults.length > 0)
-                ? window.activeDeepDiveResults
-                : (window.currentActiveDeepDive ? (window.currentActiveDeepDive.results || [window.currentActiveDeepDive]) : []);
+            // 1. ƯU TIÊN TUYỆT ĐỐI: NẠP 100% ĐỒNG NHẤT TỪ BỘ BIỂU ĐỒ ĐÃ HIỂN THỊ Ở BƯỚC 3 (ĐẢM BẢO BƯỚC 3 VÀ BƯỚC 5 GIỐNG NHAU 100%)
+            if (window.step3RenderedChartsCache && window.step3RenderedChartsCache.length > 0) {
+                chartsToRender = window.step3RenderedChartsCache.map((bc, bcIdx) => {
+                    const bLabels = bc.labels || [];
+                    const rawType = bc.chart_type || bc.type || 'bar';
+                    const isLine = rawType === 'line';
+                    const isDoughnut = rawType === 'doughnut' || rawType === 'pie';
+                    const clonedDatasets = JSON.parse(JSON.stringify(bc.datasets || []));
 
-            if (activeResults && activeResults.length > 0) {
-                activeResults.forEach((r, rIdx) => {
-                    const cfg = r.chart_config || {};
-                    const labels = cfg.labels || (cfg.data && cfg.data.labels) || [];
-                    let rawDatasets = cfg.datasets || (cfg.data && cfg.data.datasets) || [];
-
-                    // Chuẩn hóa datasets theo phong cách Hero: nổi bật nhất màu xanh đậm #2C5E82, các phần khác màu pastel #BBE4F6
-                    const rawType = cfg.type || cfg.chart_type || 'bar';
-                    const datasets = applyHeroBrandingToDatasets(rawDatasets, rawType, labels);
-
-                    if (labels.length > 0 && datasets.length > 0) {
-                        const takeaway = (r.findings && r.findings[0] && r.findings[0].detail)
-                            ? r.findings[0].detail
-                            : ((r.detailed_findings && r.detailed_findings[0]) ? r.detailed_findings[0].content : (r.summary || ''));
-                        const action = (r.report_section && r.report_section.strategic_actions && r.report_section.strategic_actions[0])
-                            ? r.report_section.strategic_actions[0]
-                            : ((r.step4_solutions && r.step4_solutions[0]) ? r.step4_solutions[0].details : 'Thực thi ngay các biện pháp can thiệp đã lượng hóa.');
-
-                        const rawType = cfg.type || cfg.chart_type || 'bar';
-                        chartsToRender.push({
-                            id: `chart_deep_dive_report_${rIdx}`,
-                            title: cfg.title || r.title || 'Phân Tích Chuyên Sâu Mở Rộng',
-                            subtitle: `Chuyên đề mở rộng: ${r.tag || 'Trọng tâm chiến lược'}`,
-                            category: 'Chuyên Đề Mở Rộng',
-                            type: rawType,
-                            indexAxis: cfg.indexAxis || (rawType === 'horizontalBar' ? 'y' : 'x'),
-                            labels: labels,
-                            datasets: datasets,
-                            takeaway: takeaway,
-                            action: action
-                        });
-                    }
+                    return {
+                        id: `rep_base_chart_${bcIdx}`,
+                        title: bc.title,
+                        subtitle: bc.subtitle || 'Phân tích cốt lõi từ dữ liệu',
+                        category: bc.category || `Chủ đề ${bcIdx + 1}`,
+                        type: rawType,
+                        indexAxis: (rawType === 'horizontalBar' || bc.indexAxis === 'y') ? 'y' : 'x',
+                        labels: bLabels,
+                        datasets: clonedDatasets,
+                        takeaway: bc.insight || bc.takeaway || 'Dữ liệu phản ánh biến động kinh doanh quan trọng.',
+                        action: bc.action || 'Theo dõi và tối ưu định kỳ theo các chỉ số cam kết.'
+                    };
                 });
             }
 
-            // 2. NẠP CÁC BIỂU ĐỒ PHÂN TÍCH CỐT LÕI TỪ BƯỚC 3
+            // 2. DỰ PHÒNG: NẾU BƯỚC 3 CHƯA NẠP THÌ NẠP TỪ activeDeepDiveResults HOẶC baseRichChartsSuite
+            if (chartsToRender.length === 0) {
+                const activeResults = (window.activeDeepDiveResults && window.activeDeepDiveResults.length > 0)
+                    ? window.activeDeepDiveResults
+                    : (window.currentActiveDeepDive ? (window.currentActiveDeepDive.results || [window.currentActiveDeepDive]) : []);
+
+                if (activeResults && activeResults.length > 0) {
+                    activeResults.forEach((r, rIdx) => {
+                        const cfg = r.chart_config || {};
+                        const labels = cfg.labels || (cfg.data && cfg.data.labels) || [];
+                        let rawDatasets = cfg.datasets || (cfg.data && cfg.data.datasets) || [];
+                        const rawType = cfg.type || cfg.chart_type || 'bar';
+                        const datasets = applyHeroBrandingToDatasets(rawDatasets, rawType, labels);
+
+                        if (labels.length > 0 && datasets.length > 0) {
+                            const takeaway = (r.findings && r.findings[0] && r.findings[0].detail)
+                                ? r.findings[0].detail
+                                : ((r.detailed_findings && r.detailed_findings[0]) ? r.detailed_findings[0].content : (r.summary || ''));
+                            const action = (r.report_section && r.report_section.strategic_actions && r.report_section.strategic_actions[0])
+                                ? r.report_section.strategic_actions[0]
+                                : ((r.step4_solutions && r.step4_solutions[0]) ? r.step4_solutions[0].details : 'Thực thi ngay các biện pháp can thiệp đã lượng hóa.');
+
+                            chartsToRender.push({
+                                id: `chart_deep_dive_report_${rIdx}`,
+                                title: cfg.title || r.title || 'Phân Tích Chuyên Sâu Mở Rộng',
+                                subtitle: `Chuyên đề mở rộng: ${r.tag || 'Trọng tâm chiến lược'}`,
+                                category: 'Chuyên Đề Mở Rộng',
+                                type: rawType,
+                                indexAxis: cfg.indexAxis || (rawType === 'horizontalBar' ? 'y' : 'x'),
+                                labels: labels,
+                                datasets: datasets,
+                                takeaway: takeaway,
+                                action: action
+                            });
+                        }
+                    });
+                }
+            }
+
             const baseCharts = (window.baseRichChartsSuite && window.baseRichChartsSuite.length > 0)
                 ? window.baseRichChartsSuite
                 : ((window.latestBackendData && window.latestBackendData.rich_charts) ? window.latestBackendData.rich_charts : []);
