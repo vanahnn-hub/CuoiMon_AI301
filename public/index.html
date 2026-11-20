@@ -2758,7 +2758,7 @@
                 const uniqueVals = Array.from(new Set(vals));
                 const colLow = stripAcc(cleanLabel(col));
 
-                const isTime = ['ngay', 'thang', 'nam', 'date', 'month', 'year', 'ky', 'quy', 'time', 'period'].some(k => colLow.includes(k));
+                const isTime = ['ngay', 'thang', 'nam', 'date', 'month', 'year', 'ky', 'quy', 'time', 'period', 'tuan'].some(k => colLow.includes(k));
                 const isIdLike = /^(ma|id|stt|code|sku|so_tt|index)\b/.test(colLow) ||
                                  /(ma_|id_|code)/.test(colLow) ||
                                  ['cua hang', 'cua_hang', 'store', 'chi nhanh', 'nhan vien', 'khach hang', 'don hang', 'hoa don', 'ca', 'day chuyen', 'loai', 'nhom', 'kenh', 'khu vuc'].some(k => colLow.includes(k));
@@ -2780,35 +2780,14 @@
                     name: col,
                     label: cleanLabel(col),
                     type: isTime ? 'datetime' : (isNumeric ? 'numeric' : 'categorical'),
-                    nunique: uniqueVals.length
+                    nunique: uniqueVals.length,
+                    samples: uniqueVals.slice(0, 15).map(v => stripAcc(String(v)))
                 };
             });
 
-            const numWeight = (c) => {
-                const l = stripAcc(c.label);
-                if (/(doanh_thu|doanh thu|revenue|sales|tien_hang|tong_tien|thanh_tien|gia_tri)/.test(l)) return 10;
-                if (/(loi_nhuan|profit|lai)/.test(l)) return 9;
-                if (/(chi_phi|cost|gia_von|cogs|phi)/.test(l)) return 8;
-                if (/(san_luong|so_luong|quantity|qty|don_hang|so_loi|defect)/.test(l)) return 7;
-                return 1;
-            };
-
-            const numCols = colProfiles.filter(c => c.type === 'numeric' && !['stt', 'id', 'index', 'so_tt'].includes(c.name.toLowerCase()) && c.nunique > 1)
-                                      .sort((a, b) => numWeight(b) - numWeight(a));
+            const numCols = colProfiles.filter(c => c.type === 'numeric' && !['stt', 'id', 'index', 'so_tt'].includes(c.name.toLowerCase()) && c.nunique > 1);
             const timeCols = colProfiles.filter(c => c.type === 'datetime');
-
-            const catWeight = (c) => {
-                const l = stripAcc(c.label);
-                if (/(khu_vuc|khu vuc|mien|region|city|tinh)/.test(l)) return 10;
-                if (/(kenh|channel|platform|nguon)/.test(l)) return 9;
-                if (/(cua_hang|cua hang|chi_nhanh|store|shop|branch)/.test(l)) return 8;
-                if (/(san_pham|san pham|product|mat_hang|danh_muc|category|item)/.test(l)) return 7;
-                if (/(ca|shift|day_chuyen|line)/.test(l)) return 6;
-                return 1;
-            };
-
-            const catCols = colProfiles.filter(c => c.type === 'categorical' && !/^(stt|id|index|so_tt)$/i.test(c.name) && c.nunique >= 2 && c.nunique <= 50)
-                                      .sort((a, b) => catWeight(b) - catWeight(a));
+            const catCols = colProfiles.filter(c => c.type === 'categorical' && !/^(stt|id|index|so_tt)$/i.test(c.name) && c.nunique >= 2);
 
             const mColProfile = numCols[0] || null;
             const mCol = mColProfile ? mColProfile.name : origCols[0];
@@ -2823,281 +2802,349 @@
                 return val.toLocaleString('vi-VN') + ' đ';
             };
 
-            // PHÂN TÍCH YÊU CẦU CỦA NGƯỜI DÙNG ĐỂ CHỌN ĐÚNG CÁC CHIỀU CHO TỪNG LOẠI BIỂU ĐỒ
+            // BÓC TÁCH TỪNG CÂU HỎI CỦA NGƯỜI DÙNG (UNIVERSAL PARSER)
             const qList = Array.isArray(userQuestions) ? userQuestions : [String(userQuestions || '')];
-            const qLines = qList.flatMap(q => String(q).split('\n')).map(l => stripAcc(l).trim()).filter(l => l.length > 0);
-
-            let barDim = null;
-            let donutDim = null;
-
-            qLines.forEach(l => {
-                catCols.forEach(c => {
-                    const cn = stripAcc(c.label);
-                    const origN = stripAcc(c.name);
-                    const isMatch = l.includes(cn) || l.includes(origN) ||
-                        (cn.includes('cua hang') && l.includes('cua hang')) ||
-                        (cn.includes('khu vuc') && l.includes('khu vuc')) ||
-                        (cn.includes('kenh') && l.includes('kenh'));
-
-                    if (isMatch) {
-                        if (/cao nhat|thap nhat|xep hang|so sanh|hon|nhat/.test(l)) {
-                            if (!barDim) barDim = c;
-                        }
-                        if (/chiem phan lon|phan lon|ty trong|co cau|tong|dong gop/.test(l)) {
-                            if (!donutDim) donutDim = c;
-                        }
-                    }
-                });
+            const rawLines = qList.flatMap(q => String(q).split('\n')).map(l => l.trim()).filter(l => l.length > 0);
+            
+            const rawItems = [];
+            rawLines.forEach(line => {
+                const parts = line.split(/[\?\;]+/).map(p => p.trim()).filter(p => p.length > 0);
+                if (parts.length > 0) rawItems.push(...parts);
+                else rawItems.push(line);
             });
 
-            if (!barDim) {
-                barDim = catCols.find(c => stripAcc(c.label).includes('cua hang')) || catCols[0] || null;
-            }
-            if (!donutDim) {
-                donutDim = catCols.find(c => c !== barDim && stripAcc(c.label).includes('khu vuc')) ||
-                           catCols.find(c => c !== barDim) ||
-                           catCols[1] || barDim;
-            }
+            const hasSpecificQuestions = rawItems.length > 0 && !rawItems.every(r => /^(tat ca|phan tich toan dien|custom|profit|revenue|cost)/i.test(r));
+
+            // HÀM SO KHỚP METRIC ĐA NĂNG
+            const universalMatchMetric = (qStr) => {
+                const qn = stripAcc(qStr);
+                let best = null, bestScore = -1;
+                numCols.forEach(c => {
+                    const cn = stripAcc(c.label);
+                    let score = 0;
+                    if (qn.includes(cn)) score += 100;
+                    cn.split(/\s+/).forEach(w => {
+                        if (w.length > 1 && !['vnd', 'usd', 'so', 'ma'].includes(w) && qn.includes(w)) score += 35;
+                    });
+                    if (/(loi_nhuan|profit|lai|lo|thua lo)/.test(qn) && /(loi_nhuan|profit|lai)/.test(cn)) score += 70;
+                    if (/(chi_phi|cost|gia_von|thue|luong|cogs)/.test(qn) && /(chi_phi|cost|gia_von|thue|luong)/.test(cn)) score += 60;
+                    if (/(doanh_thu|revenue|sales|tien)/.test(qn) && /(doanh_thu|revenue|sales)/.test(cn)) score += 60;
+                    if (/(loi|phe_pham|defect|hong)/.test(qn) && /(loi|phe_pham|defect|hong)/.test(cn)) score += 70;
+                    if (/(san_luong|output|nang_suat|so_luong)/.test(qn) && /(san_luong|output|nang_suat|so_luong)/.test(cn)) score += 60;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        best = c;
+                    }
+                });
+                return best || numCols[0] || null;
+            };
+
+            // HÀM SO KHỚP DIMENSION ĐA NĂNG (Bao gồm cả so khớp mẫu giá trị thực tế)
+            const universalMatchDim = (qStr) => {
+                const qn = stripAcc(qStr);
+                let best = null, bestScore = -1;
+                catCols.forEach(c => {
+                    const cn = stripAcc(c.label);
+                    let score = 0;
+                    if (qn.includes(cn)) score += 100;
+                    cn.split(/\s+/).forEach(w => {
+                        if (w.length > 1 && !['ma', 'id', 'so'].includes(w) && qn.includes(w)) score += 35;
+                    });
+                    // So khớp giá trị mẫu thực tế
+                    if (c.samples && c.samples.some(s => s.length > 1 && qn.includes(s))) {
+                        score += 80;
+                    }
+                    if (/(ca|shift|kip)/.test(qn) && /(ca|shift|kip)/.test(cn)) score += 60;
+                    if (/(chuyen|day_chuyen|line|may)/.test(qn) && /(chuyen|day_chuyen|line|may)/.test(cn)) score += 60;
+                    if (/(khu_vuc|mien|region|vung)/.test(qn) && /(khu_vuc|mien|region|vung)/.test(cn)) score += 60;
+                    if (/(cua_hang|store|shop|chi_nhanh)/.test(qn) && /(cua_hang|store|shop|chi_nhanh)/.test(cn)) score += 60;
+                    if (/(kenh|channel|platform|san)/.test(qn) && /(kenh|channel|platform|san)/.test(cn)) score += 60;
+                    if (/(san_pham|item|product|mat_hang)/.test(qn) && /(san_pham|item|product|mat_hang)/.test(cn)) score += 60;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        best = c;
+                    }
+                });
+                return best || catCols[0] || null;
+            };
 
             const charts = [];
+            const usedSignatures = new Set();
 
-            // 1. Biểu đồ đường xu hướng thời gian (Line Chart)
-            const tColProfile = timeCols[0] || null;
-            if (tColProfile) {
-                const tCol = tColProfile.name;
-                const tLabel = tColProfile.label;
-                const timeMap = {};
-                rows.forEach(r => {
-                    const key = String(r[tCol] !== undefined ? r[tCol] : 'N/A').trim();
-                    let val = mColProfile ? getValFromRow(r, mCol) : 1;
-                    if (isNaN(val)) val = 0;
-                    timeMap[key] = (timeMap[key] || 0) + val;
+            if (hasSpecificQuestions) {
+                // SINH BIỂU ĐỒ BÁM SÁT TỪNG CÂU HỎI CỦA NGƯỜI DÙNG (KHÔNG GIỚI HẠN SỐ LƯỢNG)
+                rawItems.forEach((qItem, qIdx) => {
+                    const qn = stripAcc(qItem);
+                    const itMetric = universalMatchMetric(qItem);
+                    const itDim = universalMatchDim(qItem);
+
+                    const mName = itMetric ? itMetric.name : mCol;
+                    const mLbl = itMetric ? itMetric.label : mLabel;
+                    const dName = itDim ? itDim.name : (catCols[0] ? catCols[0].name : 'Phân loại');
+                    const dLbl = itDim ? itDim.label : (catCols[0] ? catCols[0].label : 'Phân loại');
+
+                    // 1. Ý ĐỒ: CHUỖI THỜI GIAN / XU HƯỚNG / BIẾN ĐỘNG
+                    if (timeCols[0] && /(thang|ngay|nam|chu ky|xu huong|trend|tang giam|bien dong|month|date|giai doan)/.test(qn)) {
+                        const tCol = timeCols[0].name;
+                        const tLbl = timeCols[0].label;
+                        const timeMap = {};
+                        rows.forEach(r => {
+                            const k = String(r[tCol] !== undefined ? r[tCol] : 'N/A').trim();
+                            timeMap[k] = (timeMap[k] || 0) + getValFromRow(r, mName);
+                        });
+                        const sortedKeys = Object.keys(timeMap).sort();
+                        const sData = sortedKeys.map(k => Math.round(timeMap[k]));
+
+                        let maxIdx = 0, minIdx = 0, sumVal = 0;
+                        sData.forEach((v, idx) => {
+                            sumVal += v;
+                            if (v > sData[maxIdx]) maxIdx = idx;
+                            if (v < sData[minIdx]) minIdx = idx;
+                        });
+
+                        charts.push({
+                            id: `chart_q_${qIdx + 1}`,
+                            finding_id: `F${charts.length + 1}`,
+                            chart_type: "line",
+                            title: `Diễn Biến ${mLbl} Theo Chu Kỳ ${tLbl}`,
+                            subtitle: `Trả lời trực tiếp yêu cầu: "${qItem}"`,
+                            agent_reason: `Agent trực quan hóa chu kỳ biến động của ${mLbl} qua từng ${tLbl} để làm rõ xu hướng theo yêu cầu.`,
+                            labels: sortedKeys,
+                            datasets: [{
+                                label: mLbl,
+                                data: sData,
+                                fill: true,
+                                borderColor: '#2C5E82',
+                                backgroundColor: 'rgba(187, 228, 246, 0.4)'
+                            }],
+                            series: [{ name: mLbl, data: sData }],
+                            key_numbers: [
+                                `Mốc cao nhất: '${sortedKeys[maxIdx]}' (${formatVal(sData[maxIdx])})`,
+                                `Mốc thấp nhất: '${sortedKeys[minIdx]}' (${formatVal(sData[minIdx])})`,
+                                `Tổng tích lũy toàn kỳ: ${formatVal(sumVal)}`
+                            ],
+                            insight: `${mLbl} ghi nhận biến động qua chu kỳ ${tLbl}, đạt mốc cao nhất tại '${sortedKeys[maxIdx]}' (${formatVal(sData[maxIdx])}).`,
+                            action: `Chủ động nguồn lực chuẩn bị đón đầu các đợt cao điểm như '${sortedKeys[maxIdx]}' và tối ưu hóa tại các mốc đáy.`
+                        });
+                        return;
+                    }
+
+                    // 2. Ý ĐỒ: CƠ CẤU TỶ TRỌNG / CHIẾM PHẦN LỚN
+                    if (/(chiem phan lon|phan lon|ty trong|co cau|tong|dong gop)/.test(qn)) {
+                        const grpMap = {};
+                        let totalVal = 0;
+                        rows.forEach(r => {
+                            const k = String(r[dName] !== undefined ? r[dName] : 'Khác').trim();
+                            const v = getValFromRow(r, mName);
+                            grpMap[k] = (grpMap[k] || 0) + v;
+                            totalVal += v;
+                        });
+                        const sorted = Object.entries(grpMap).sort((a, b) => b[1] - a[1]).slice(0, 6);
+                        const labels = sorted.map(x => x[0]);
+                        const sData = sorted.map(x => Math.round(x[1]));
+                        const topPct = totalVal > 0 ? ((sorted[0][1] / totalVal) * 100).toFixed(1) : '0';
+
+                        charts.push({
+                            id: `chart_q_${qIdx + 1}`,
+                            finding_id: `F${charts.length + 1}`,
+                            chart_type: "doughnut",
+                            title: `Cơ Cấu Tỷ Trọng ${mLbl} Theo ${dLbl}`,
+                            subtitle: `Trả lời trực tiếp yêu cầu: "${qItem}"`,
+                            agent_reason: `Agent tính toán cơ cấu tỷ trọng % đóng góp của từng ${dLbl} để xác định chính xác nhóm chiếm phần lớn.`,
+                            labels: labels,
+                            datasets: [{
+                                label: mLbl,
+                                data: sData,
+                                backgroundColor: ['#2C5E82', '#6BA3C7', '#92C3E1', '#BBE4F6', '#E0F1FC', '#FCF8E7']
+                            }],
+                            series: [{ name: mLbl, data: sData }],
+                            key_numbers: [
+                                `Chiếm phần lớn: '${sorted[0][0]}' (${topPct}%)`,
+                                `Quy mô dẫn đầu: ${formatVal(sorted[0][1])}`,
+                                `Tổng quy mô toàn bộ: ${formatVal(totalVal)}`
+                            ],
+                            insight: `'${sorted[0][0]}' dẫn đầu cơ cấu khi chiếm ${topPct}% tổng ${mLbl} (${formatVal(sorted[0][1])}), là động lực đóng góp chủ đạo của toàn hệ thống.`,
+                            action: `Tối ưu hóa nguồn lực tại '${sorted[0][0]}' đồng thời kích hoạt gói tăng tốc cho các phân nhóm còn lại.`
+                        });
+                        return;
+                    }
+
+                    // 3. Ý ĐỒ: PHÂN TÍCH LỢI NHUẬN / LÃI LỖ / PHÂN HÓA ÂM DƯƠNG
+                    if (/(loi_nhuan|lai|lo|thua lo|am)/.test(qn)) {
+                        const grpMap = {};
+                        rows.forEach(r => {
+                            const k = String(r[dName] !== undefined ? r[dName] : 'Khác').trim();
+                            grpMap[k] = (grpMap[k] || 0) + getValFromRow(r, mName);
+                        });
+                        const sorted = Object.entries(grpMap).sort((a, b) => b[1] - a[1]);
+                        const labels = sorted.map(x => x[0]);
+                        const sData = sorted.map(x => Math.round(x[1]));
+
+                        const bgColors = sData.map(v => v < 0 ? '#E17055' : '#2C5E82');
+
+                        charts.push({
+                            id: `chart_q_${qIdx + 1}`,
+                            finding_id: `F${charts.length + 1}`,
+                            chart_type: "bar",
+                            title: `Phân Tích ${mLbl} Giữa Các ${dLbl}`,
+                            subtitle: `Trả lời trực tiếp yêu cầu: "${qItem}"`,
+                            agent_reason: `Agent đánh giá chi tiết biên độ và mức độ chênh lệch ${mLbl} giữa từng ${dLbl}.`,
+                            labels: labels,
+                            datasets: [{
+                                label: mLbl,
+                                data: sData,
+                                backgroundColor: bgColors,
+                                borderColor: '#0F2942'
+                            }],
+                            series: [{ name: mLbl, data: sData }],
+                            key_numbers: [
+                                `Cao nhất: '${sorted[0][0]}' (${formatVal(sorted[0][1])})`,
+                                `Thấp nhất: '${sorted[sorted.length - 1][0]}' (${formatVal(sorted[sorted.length - 1][1])})`,
+                                `Tổng số phân nhóm: ${sorted.length}`
+                            ],
+                            insight: `Đơn vị '${sorted[0][0]}' đạt hiệu quả tốt nhất với ${formatVal(sorted[0][1])}, tạo chênh lệch rõ rệt so với '${sorted[sorted.length - 1][0]}'.`,
+                            action: `Rà soát các đơn vị có kết quả thấp để can thiệp kịp thời và cải thiện hiệu suất.`
+                        });
+                        return;
+                    }
+
+                    // 4. Ý ĐỒ: SO SÁNH / XẾP HẠNG / CAO NHẤT
+                    const sig = `bar_${dName}_${mName}`;
+                    if (usedSignatures.has(sig)) {
+                        const otherDim = catCols.find(c => c.name !== dName) || null;
+                        if (otherDim) {
+                            const oName = otherDim.name;
+                            const oLbl = otherDim.label;
+                            const subCats = Array.from(new Set(rows.map(r => String(r[oName] || 'Khác')))).slice(0, 4);
+                            const topMain = Array.from(new Set(rows.map(r => String(r[dName] || 'Khác')))).slice(0, 10);
+                            
+                            const palette = ['#2C5E82', '#92C3E1', '#BBE4F6', '#FCF8E7'];
+                            const ds = subCats.map((sc, i) => {
+                                const dArr = topMain.map(mKey => {
+                                    return rows.filter(r => String(r[dName]) === mKey && String(r[oName]) === sc)
+                                               .reduce((acc, curr) => acc + getValFromRow(curr, mName), 0);
+                                });
+                                return {
+                                    label: sc,
+                                    data: dArr.map(x => Math.round(x)),
+                                    backgroundColor: palette[i % palette.length]
+                                };
+                            });
+
+                            charts.push({
+                                id: `chart_q_${qIdx + 1}`,
+                                finding_id: `F${charts.length + 1}`,
+                                chart_type: "bar",
+                                title: `Phân Bổ ${mLbl} Chi Tiết Của Từng ${oLbl} Trong Mỗi ${dLbl}`,
+                                subtitle: `Trả lời trực tiếp yêu cầu: "${qItem}"`,
+                                agent_reason: `Agent phân tích ma trận đa chiều giữa ${dLbl} và ${oLbl} để giải quyết yêu cầu chuyên sâu.`,
+                                labels: topMain,
+                                datasets: ds,
+                                series: ds,
+                                key_numbers: [
+                                    `Số lượng ${dLbl}: ${topMain.length}`,
+                                    `Số lượng ${oLbl}: ${subCats.length}`,
+                                    `Tổng chỉ số: ${formatVal(rows.reduce((acc, curr) => acc + getValFromRow(curr, mName), 0))}`
+                                ],
+                                insight: `Phân bổ của ${mLbl} bóc tách theo từng ${oLbl} phản ánh rõ cơ cấu và độ lệch hiệu suất nội bộ.`,
+                                action: `Cân đối tỷ trọng đóng góp và tăng cường nguồn lực tại các phân khúc tiềm năng.`
+                            });
+                            return;
+                        }
+                    }
+
+                    usedSignatures.add(sig);
+                    const grpMap = {};
+                    rows.forEach(r => {
+                        const k = String(r[dName] !== undefined ? r[dName] : 'Khác').trim();
+                        grpMap[k] = (grpMap[k] || 0) + getValFromRow(r, mName);
+                    });
+                    const sorted = Object.entries(grpMap).sort((a, b) => b[1] - a[1]).slice(0, 12);
+                    const labels = sorted.map(x => x[0]);
+                    const sData = sorted.map(x => Math.round(x[1]));
+
+                    charts.push({
+                        id: `chart_q_${qIdx + 1}`,
+                        finding_id: `F${charts.length + 1}`,
+                        chart_type: "bar",
+                        title: `So Sánh ${mLbl} Theo ${dLbl}`,
+                        subtitle: `Trả lời trực tiếp yêu cầu: "${qItem}"`,
+                        agent_reason: `Agent so sánh quy mô ${mLbl} giữa các ${dLbl} nhằm làm rõ đơn vị đạt mức cao nhất và thấp nhất.`,
+                        labels: labels,
+                        datasets: [{
+                            label: mLbl,
+                            data: sData,
+                            backgroundColor: '#2C5E82',
+                            borderColor: '#0F2942'
+                        }],
+                        series: [{ name: mLbl, data: sData }],
+                        key_numbers: [
+                            `Dẫn đầu: '${sorted[0][0]}' (${formatVal(sorted[0][1])})`,
+                            `Tụt hậu: '${sorted[sorted.length - 1][0]}' (${formatVal(sorted[sorted.length - 1][1])})`,
+                            `Chênh lệch: ${(sorted[sorted.length - 1][1] > 0 ? (sorted[0][1] / sorted[sorted.length - 1][1]).toFixed(1) : '1.0')} lần`
+                        ],
+                        insight: `'${sorted[0][0]}' đạt mức ${mLbl} cao nhất trong nhóm ${dLbl}, bỏ xa đơn vị cuối bảng.`,
+                        action: `Chuyển giao kinh nghiệm từ '${sorted[0][0]}' sang các đơn vị còn lại để san phẳng hiệu quả.`
+                    });
                 });
-                const sortedKeys = Object.keys(timeMap).sort();
-                const labels = sortedKeys;
-                let seriesData = sortedKeys.map(k => Math.round(timeMap[k]));
+            }
 
-                if (seriesData.every(v => v === 0)) {
-                    const countMap = {};
+            // Fallback nếu chưa có biểu đồ nào
+            if (charts.length === 0) {
+                if (timeCols[0]) {
+                    const tCol = timeCols[0].name;
+                    const tLabel = timeCols[0].label;
+                    const timeMap = {};
                     rows.forEach(r => {
                         const key = String(r[tCol] !== undefined ? r[tCol] : 'N/A').trim();
-                        countMap[key] = (countMap[key] || 0) + 1;
+                        timeMap[key] = (timeMap[key] || 0) + (mColProfile ? getValFromRow(r, mCol) : 1);
                     });
-                    seriesData = sortedKeys.map(k => countMap[k] || 1);
-                }
-
-                if (labels.length > 0) {
-                    let maxIdx = 0, minIdx = 0, sumVal = 0;
-                    seriesData.forEach((v, idx) => {
-                        sumVal += v;
-                        if (v > seriesData[maxIdx]) maxIdx = idx;
-                        if (v < seriesData[minIdx]) minIdx = idx;
-                    });
-                    const firstVal = seriesData[0];
-                    const lastVal = seriesData[seriesData.length - 1];
-                    const growthPct = firstVal > 0 ? (((lastVal - firstVal) / firstVal) * 100).toFixed(1) : '0';
-                    const growthSign = +growthPct >= 0 ? '+' : '';
-
+                    const sortedKeys = Object.keys(timeMap).sort();
+                    const seriesData = sortedKeys.map(k => Math.round(timeMap[k]));
                     charts.push({
                         id: "f1",
                         finding_id: "F1",
                         chart_type: "line",
                         title: `1. Diễn Biến ${mLabel} Theo Chu Kỳ ${tLabel}`,
-                        subtitle: `Phân tích biến động tăng giảm và chuỗi thời gian bám sát yêu cầu người dùng`,
-                        agent_reason: `Agent trực quan hóa chu kỳ tăng giảm của ${mLabel} qua từng ${tLabel} để làm rõ xu hướng biến động.`,
-                        labels: labels,
-                        datasets: [{
-                            label: mLabel,
-                            data: seriesData,
-                            fill: true,
-                            borderColor: '#2C5E82',
-                            backgroundColor: 'rgba(187, 228, 246, 0.4)'
-                        }],
+                        subtitle: `Theo dõi chu kỳ biến động qua từng mốc ${tLabel}`,
+                        labels: sortedKeys,
+                        datasets: [{ label: mLabel, data: seriesData, fill: true, borderColor: '#2C5E82', backgroundColor: 'rgba(187, 228, 246, 0.4)' }],
                         series: [{ name: mLabel, data: seriesData }],
-                        key_numbers: [
-                            `Mốc cao nhất: '${labels[maxIdx]}' (${formatVal(seriesData[maxIdx])})`,
-                            `Mốc thấp nhất: '${labels[minIdx]}' (${formatVal(seriesData[minIdx])})`,
-                            `Tổng tích lũy toàn kỳ: ${formatVal(sumVal)}`
-                        ],
-                        insight: `${mLabel} ghi nhận biến động ${growthSign}${growthPct}% từ mốc ${labels[0]} đến ${labels[labels.length - 1]}, đạt đỉnh tại '${labels[maxIdx]}' (${formatVal(seriesData[maxIdx])}).`,
-                        action: `Chủ động nguồn lực chuẩn bị đón đầu các đợt cao điểm như '${labels[maxIdx]}' và kích cầu tại các mốc đáy.`
+                        key_numbers: [`Mốc cao nhất: '${sortedKeys[0]}'`, `Tổng tích lũy: ${formatVal(seriesData.reduce((a,b)=>a+b,0))}`],
+                        insight: `Chỉ số vận hành ghi nhận biến động qua chu kỳ ${tLabel}.`,
+                        action: `Chủ động phân bổ nguồn lực theo từng chu kỳ.`
                     });
                 }
-            }
-
-            // 2. Biểu đồ cột xếp hạng so sánh theo barDim (Bar Chart - Cửa hàng nào cao nhất)
-            if (barDim) {
-                const dCol = barDim.name;
-                const dLabel = barDim.label;
-                const groupMap = {};
-                rows.forEach(r => {
-                    const key = String(r[dCol] !== undefined ? r[dCol] : 'Khác').trim();
-                    let val = mColProfile ? getValFromRow(r, mCol) : 1;
-                    if (isNaN(val)) val = 0;
-                    groupMap[key] = (groupMap[key] || 0) + val;
-                });
-                let sorted = Object.entries(groupMap).sort((a, b) => b[1] - a[1]);
-                if (sorted.every(x => x[1] === 0)) {
-                    const countMap = {};
+                if (catCols[0]) {
+                    const dCol = catCols[0].name;
+                    const dLabel = catCols[0].label;
+                    const grp = {};
                     rows.forEach(r => {
-                        const key = String(r[dCol] !== undefined ? r[dCol] : 'Khác').trim();
-                        countMap[key] = (countMap[key] || 0) + 1;
+                        const k = String(r[dCol] || 'Khác');
+                        grp[k] = (grp[k] || 0) + (mColProfile ? getValFromRow(r, mCol) : 1);
                     });
-                    sorted = Object.entries(countMap).sort((a, b) => b[1] - a[1]);
-                }
-                const topItems = sorted.slice(0, 12);
-                const labels = topItems.map(x => x[0]);
-                const seriesData = topItems.map(x => Math.round(x[1]));
-
-                if (labels.length > 0) {
-                    const leader = topItems[0];
-                    const laggard = topItems[topItems.length - 1];
-                    const ratio = laggard[1] > 0 ? (leader[1] / laggard[1]).toFixed(1) : '1.0';
-                    const totalSum = sorted.reduce((acc, curr) => acc + curr[1], 0);
-                    const leaderPct = totalSum > 0 ? ((leader[1] / totalSum) * 100).toFixed(1) : '0';
-
+                    const s = Object.entries(grp).sort((a,b)=>b[1]-a[1]).slice(0, 10);
                     charts.push({
                         id: "f2",
                         finding_id: "F2",
                         chart_type: "bar",
                         title: `2. So Sánh ${mLabel} Theo ${dLabel}`,
-                        subtitle: `Xác định đơn vị dẫn đầu (${dLabel} cao nhất) theo yêu cầu người dùng`,
-                        agent_reason: `Agent so sánh trực diện quy mô ${mLabel} giữa các ${dLabel} để xếp hạng cao nhất và thấp nhất.`,
-                        labels: labels,
-                        datasets: [{
-                            label: mLabel,
-                            data: seriesData,
-                            backgroundColor: '#2C5E82',
-                            borderColor: '#0F2942'
-                        }],
-                        series: [{ name: mLabel, data: seriesData }],
-                        key_numbers: [
-                            `Dẫn đầu: '${leader[0]}' (${formatVal(leader[1])})`,
-                            `Tụt hậu: '${laggard[0]}' (${formatVal(laggard[1])})`,
-                            `Chênh lệch: ${ratio} lần (Chiếm ${leaderPct}% tổng)`
-                        ],
-                        insight: `Đơn vị '${leader[0]}' dẫn đầu với ${formatVal(leader[1])} (chiếm ${leaderPct}% tổng thể), cao gấp ${ratio} lần so với '${laggard[0]}'.`,
-                        action: `Chuyển giao kinh nghiệm thực hành xuất sắc từ '${leader[0]}' sang nhóm '${laggard[0]}' để san phẳng độ lệch hiệu quả.`
+                        subtitle: `Xếp hạng quy mô đóng góp giữa các ${dLabel}`,
+                        labels: s.map(x=>x[0]),
+                        datasets: [{ label: mLabel, data: s.map(x=>Math.round(x[1])), backgroundColor: '#2C5E82' }],
+                        series: [{ name: mLabel, data: s.map(x=>Math.round(x[1])) }],
+                        key_numbers: [`Dẫn đầu: '${s[0][0]}'`, `Tụt hậu: '${s[s.length-1][0]}'`],
+                        insight: `'${s[0][0]}' chi phối phần lớn quy mô ${mLabel}.`,
+                        action: `Chuẩn hóa quy trình từ đơn vị dẫn đầu.`
                     });
                 }
             }
 
-            // 3. Biểu đồ tròn cơ cấu tỷ trọng theo donutDim (Doughnut Chart - Khu vực nào chiếm phần lớn)
-            if (donutDim) {
-                const dCol2 = donutDim.name;
-                const dLabel2 = donutDim.label;
-                const groupMap2 = {};
-                let totalVal2 = 0;
-                rows.forEach(r => {
-                    const key = String(r[dCol2] !== undefined ? r[dCol2] : 'Khác').trim();
-                    let val = mColProfile ? getValFromRow(r, mCol) : 1;
-                    if (isNaN(val)) val = 0;
-                    groupMap2[key] = (groupMap2[key] || 0) + val;
-                    totalVal2 += val;
-                });
-                let sorted2 = Object.entries(groupMap2).sort((a, b) => b[1] - a[1]);
-                if (sorted2.every(x => x[1] === 0)) {
-                    const countMap2 = {};
-                    rows.forEach(r => {
-                        const key = String(r[dCol2] !== undefined ? r[dCol2] : 'Khác').trim();
-                        countMap2[key] = (countMap2[key] || 0) + 1;
-                    });
-                    sorted2 = Object.entries(countMap2).sort((a, b) => b[1] - a[1]);
-                    totalVal2 = rows.length;
-                }
-                const top5 = sorted2.slice(0, 6);
-                const labels2 = top5.map(x => x[0]);
-                const seriesData2 = top5.map(x => Math.round(x[1]));
-
-                if (labels2.length > 0 && totalVal2 > 0) {
-                    const top1Pct = ((top5[0][1] / totalVal2) * 100).toFixed(1);
-                    const top2Pct = top5.length > 1 ? (((top5[0][1] + top5[1][1]) / totalVal2) * 100).toFixed(1) : top1Pct;
-
-                    charts.push({
-                        id: "f3",
-                        finding_id: "F3",
-                        chart_type: "doughnut",
-                        title: `3. Cơ Cấu Tỷ Trọng ${mLabel} Theo ${dLabel2}`,
-                        subtitle: `Xác định ${dLabel2} chiếm phần lớn tổng nguồn thu theo yêu cầu người dùng`,
-                        agent_reason: `Agent tính toán cơ cấu phần trăm đóng góp của từng ${dLabel2} để giải đáp nhóm chiếm phần lớn nguồn thu.`,
-                        labels: labels2,
-                        datasets: [{
-                            label: mLabel,
-                            data: seriesData2,
-                            backgroundColor: ['#2C5E82', '#6BA3C7', '#92C3E1', '#BBE4F6', '#E0F1FC', '#FCF8E7']
-                        }],
-                        series: [{ name: mLabel, data: seriesData2 }],
-                        key_numbers: [
-                            `Chiếm phần lớn: '${top5[0][0]}' (${top1Pct}%)`,
-                            `Top 2 chi phối: ${top2Pct}% quy mô`,
-                            `Tổng quy mô toàn bộ: ${formatVal(totalVal2)}`
-                        ],
-                        insight: `'${top5[0][0]}' dẫn đầu cơ cấu khi chiếm ${top1Pct}% tổng ${mLabel} (${formatVal(top5[0][1])}), là động lực đóng góp chủ đạo của toàn hệ thống.`,
-                        action: `Tối ưu hóa chuỗi cung ứng tại '${top5[0][0]}' đồng thời kích hoạt gói tăng tốc cho các ${dLabel2} còn lại để mở rộng quy mô bền vững.`
-                    });
-                }
-            }
-
-            // 4. Biểu đồ cột kép đối chiếu 2 chỉ số tài chính (Multi-bar Chart - Lợi nhuận vs Chi phí)
-            const metricProf = numCols.find(c => /(loi_nhuan|profit|lai)/.test(stripAcc(c.label)));
-            const metricCost = numCols.find(c => /(chi_phi|cost|gia_von|cogs|thue)/.test(stripAcc(c.label)));
-            const refDim = barDim || catCols[0];
-
-            if (refDim && (metricProf || metricCost || numCols.length > 1)) {
-                const m1 = metricProf || numCols[0];
-                const m2 = metricCost || (numCols.find(c => c !== m1) || numCols[0]);
-
-                if (m1 && m2 && m1 !== m2) {
-                    const dimCol = refDim.name;
-                    const topUnits = (charts[1] ? charts[1].labels : []).slice(0, 10);
-                    const m1Map = {}, m2Map = {};
-
-                    rows.forEach(r => {
-                        const k = String(r[dimCol] !== undefined ? r[dimCol] : 'Khác').trim();
-                        m1Map[k] = (m1Map[k] || 0) + getValFromRow(r, m1.name);
-                        m2Map[k] = (m2Map[k] || 0) + getValFromRow(r, m2.name);
-                    });
-
-                    const targetUnits = topUnits.length > 0 ? topUnits : Object.keys(m1Map).slice(0, 10);
-                    const d1 = targetUnits.map(k => Math.round(m1Map[k] || 0));
-                    const d2 = targetUnits.map(k => Math.round(m2Map[k] || 0));
-
-                    charts.push({
-                        id: "f4",
-                        finding_id: "F4",
-                        chart_type: "bar",
-                        title: `4. Đối Chiếu ${m1.label} vs ${m2.label} Theo ${refDim.label}`,
-                        subtitle: `Đo lường hiệu quả kinh doanh và mối quan hệ định lượng đa chiều`,
-                        agent_reason: `Agent đối chiếu song song ${m1.label} và ${m2.label} theo từng ${refDim.label} để phát hiện điểm nghẽn biên lợi nhuận.`,
-                        labels: targetUnits,
-                        datasets: [
-                            {
-                                label: m1.label,
-                                data: d1,
-                                backgroundColor: '#2C5E82',
-                                borderColor: '#0F2942'
-                            },
-                            {
-                                label: m2.label,
-                                data: d2,
-                                backgroundColor: '#92C3E1',
-                                borderColor: '#2C5E82'
-                            }
-                        ],
-                        series: [
-                            { name: m1.label, data: d1 },
-                            { name: m2.label, data: d2 }
-                        ],
-                        key_numbers: [
-                            `Tổng ${m1.label}: ${formatVal(d1.reduce((a, b) => a + b, 0))}`,
-                            `Tổng ${m2.label}: ${formatVal(d2.reduce((a, b) => a + b, 0))}`,
-                            `Đơn vị phân tích: ${targetUnits.length} ${refDim.label}`
-                        ],
-                        insight: `Tương quan giữa ${m1.label} và ${m2.label} thể hiện rõ sự phân hóa hiệu quả kinh doanh giữa các ${refDim.label}.`,
-                        action: `Kiểm soát chặt chẽ ${m2.label} tại các đơn vị có tỷ lệ chi phí cao để bảo toàn biên lợi nhuận.`
-                    });
-                }
-            }
+            // Đánh số lại thứ tự từ 1 đến N
+            charts.forEach((c, idx) => {
+                c.finding_id = `F${idx + 1}`;
+                c.title = `${idx + 1}. ${c.title.replace(/^\d+\.\s*/, '')}`;
+            });
 
             return charts;
         }
@@ -5833,8 +5880,8 @@ async function submitStep2DirectCleaning() {
                                 <td class="py-3 px-3.5 align-middle">
                                     <div class="font-bold text-slate-900 text-[12px] leading-snug">${metric}</div>
                                 </td>
-                                <td class="py-3 px-3 align-middle text-right whitespace-nowrap">
-                                    <span class="font-extrabold text-slate-900 text-[12.5px] font-mono tracking-tight">${current}</span>
+                                <td class="py-3 px-3 align-middle text-right">
+                                    <span class="font-bold text-slate-900 text-[11.5px] sm:text-[12px] leading-snug break-words block">${current}</span>
                                 </td>
                                 <td class="py-3 px-3.5 align-middle">
                                     <div class="font-bold text-pastel-950 text-[11.5px] leading-relaxed bg-pastel-50/70 p-2 rounded-lg border border-pastel-200/80">${target}</div>
