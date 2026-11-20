@@ -2747,23 +2747,27 @@
             const backend = window.latestBackendData;
             let rawList = [];
 
-            if (backend && Array.isArray(backend.user_questions) && backend.user_questions.length > 0) {
-                rawList = backend.user_questions;
-            } else if (backend && backend.custom_query && String(backend.custom_query).trim().length > 0) {
+            // Ưu tiên 1: Câu hỏi trong ô nhập định hướng tùy chỉnh (nếu có nhập)
+            const customInput = document.getElementById("customDirectionQueryInput");
+            if (customInput && customInput.value.trim().length > 0) {
+                rawList = [customInput.value.trim()];
+            }
+            // Ưu tiên 2: Mệnh lệnh phân tích tùy chỉnh đã lưu trong backend
+            else if (backend && backend.custom_query && String(backend.custom_query).trim().length > 0) {
                 rawList = [String(backend.custom_query)];
-            } else {
-                const customInput = document.getElementById("customDirectionQueryInput");
-                if (customInput && customInput.value.trim().length > 0) {
-                    rawList = [customInput.value.trim()];
+            }
+            // Ưu tiên 3: Mệnh lệnh trên badge của Step 3 (nếu có nội dung cụ thể)
+            else {
+                const badge = document.getElementById("step3EnforcedQueryBadge");
+                const badgeText = badge ? badge.innerText.replace(/^[\"\'\s]+|[\"\'\s]+$/g, "").trim() : "";
+                if (badgeText.length > 0 && !badgeText.includes("Phân tích toàn diện") && !badgeText.includes("Phân tích đa chiều")) {
+                    rawList = [badgeText];
+                } else if (backend && Array.isArray(backend.user_questions) && backend.user_questions.length > 0) {
+                    rawList = backend.user_questions;
                 } else {
                     const descInput = document.getElementById("bizDescriptionInput");
                     if (descInput && descInput.value.trim().length > 0) {
                         rawList = [descInput.value.trim()];
-                    } else {
-                        const badge = document.getElementById("step3EnforcedQueryBadge");
-                        if (badge && badge.innerText.trim().length > 0) {
-                            rawList = [badge.innerText.replace(/^[\"\'\s]+|[\"\'\s]+$/g, "").trim()];
-                        }
                     }
                 }
             }
@@ -6757,21 +6761,27 @@ async function submitStep2DirectCleaning() {
                     }
                 }
             } catch (err) {
-                console.error('Error analyzing direction (fallback to client-side):', err);
-                // CLIENT-SIDE ENGINE CHO VERCEL & OFFLINE
+                console.error("Error analyzing direction (fallback to client-side):", err);
+                // CLIENT-SIDE ENGINE CHO VERCEL & OFFLINE (BẢO ĐẢM TẠO ĐỦ 100% CÂU TRẢ LỜI & BIỂU ĐỒ)
                 const rows = window.cleanedDataRows || (window.latestBackendData && (window.latestBackendData.full_data || window.latestBackendData.cleaned_preview)) || [];
                 if (rows.length > 0) {
                     const kpis = (window.latestBackendData && window.latestBackendData.kpis) ? window.latestBackendData.kpis : {};
                     const effectiveQuery = customQuery || (window.latestBackendData && window.latestBackendData.custom_query) || primaryDirection;
-                    const effectiveQs = getUserEffectiveQuestions(); const clientRichCharts = generateClientSideRichCharts(rows, effectiveQs.length > 0 ? effectiveQs : [effectiveQuery], profile.company_name);
-                    const clientCS = generateClientSideCausesAndSolutions(clientRichCharts, kpis, rows, effectiveQuery);
+                    const effectiveQs = getUserEffectiveQuestions();
+                    const qsToUse = (effectiveQs && effectiveQs.length > 0) ? effectiveQs : (customQuery ? customQuery.split(/\r?\n/).map(x => x.trim()).filter(x => x.length > 0) : [effectiveQuery]);
+
+                    const clientRichCharts = generateClientSideRichCharts(rows, qsToUse, profile.company_name);
+                    const clientDirectAnswers = generateClientSideDirectAnswers(rows, qsToUse);
+                    const clientCS = generateClientSideCausesAndSolutions(clientRichCharts, kpis, rows, qsToUse.join("\n"));
                     const clientReport = generateClientSideStep5Report(clientRichCharts, clientCS.causes, clientCS.solutions, kpis);
                     const clientStep3Summary = generateClientSideStep3Summary(clientRichCharts);
 
                     const fallbackData = {
                         ...(window.latestBackendData || {}),
                         chosen_direction: primaryDirection,
-                        custom_query: customQuery || (window.latestBackendData ? window.latestBackendData.custom_query : ''),
+                        custom_query: customQuery || (window.latestBackendData ? window.latestBackendData.custom_query : ""),
+                        user_questions: qsToUse,
+                        direct_answers: clientDirectAnswers,
                         rich_charts: clientRichCharts,
                         step3_summary: clientStep3Summary,
                         structured_causes: clientCS.causes,
@@ -8242,8 +8252,8 @@ async function submitStep2DirectCleaning() {
             const questions = getUserEffectiveQuestions();
             let richCharts = (backend && Array.isArray(backend.rich_charts) && backend.rich_charts.length > 0) ? backend.rich_charts : null;
 
-            // KIỂM TRA: NẾU THIẾU BIỂU ĐỒ HOẶC CHƯA CÓ -> TỰ ĐỘNG SINH ĐỦ 100% THEO SỐ CÂU HỎI
-            const needsRegen = !richCharts || (questions.length > 0 && richCharts.length < questions.length);
+            // BẮT BUỘC TÁI TẠO NẾU CHƯA CÓ BIỂU ĐỒ HOẶC SỐ BIỂU ĐỒ CHƯA ĐỦ TRẢ LỜI TẤT CẢ CÂU HỎI
+            const needsRegen = !richCharts || (questions.length > 0 && richCharts.length !== questions.length);
 
             if (needsRegen) {
                 const rows = (window.cleanedDataRows && window.cleanedDataRows.length > 0)
@@ -8255,14 +8265,18 @@ async function submitStep2DirectCleaning() {
                             : (SAMPLE_DATASETS[activeDatasetKey] ? SAMPLE_DATASETS[activeDatasetKey].previewRows : null)));
 
                 if (rows && rows.length > 0) {
-                    const compName = (backend && backend.business_profile && backend.business_profile.company_name) || '';
+                    const compName = (backend && backend.business_profile && backend.business_profile.company_name) || "";
                     richCharts = generateClientSideRichCharts(rows, questions, compName);
                     if (backend) {
                         backend.rich_charts = richCharts;
                         backend.user_questions = questions;
-                        if (!backend.direct_answers || backend.direct_answers.length === 0) {
-                            backend.direct_answers = generateClientSideDirectAnswers(rows, questions);
-                        }
+                        backend.direct_answers = generateClientSideDirectAnswers(rows, questions);
+
+                        // Đồng bộ trực tiếp Nguyên nhân (Bước 4) & Báo cáo kết quả (Bước 5) theo bộ biểu đồ mới
+                        const clientCS = generateClientSideCausesAndSolutions(richCharts, backend.kpis || {}, rows, questions.join("\n"));
+                        backend.structured_causes = clientCS.causes;
+                        backend.structured_solutions = clientCS.solutions;
+                        backend.step5_report = generateClientSideStep5Report(richCharts, clientCS.causes, clientCS.solutions, backend.kpis || {});
                     }
                 }
             }
