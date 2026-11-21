@@ -525,6 +525,29 @@ def calculate_correlations(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         return None
     return numeric_df.corr().round(3)
 
+def detect_actual_datetime_column(df: pd.DataFrame) -> Optional[str]:
+    """Tìm cột ngày tháng thực sự dựa trên việc parse thử các giá trị trong cột."""
+    for c in df.columns:
+        # Bỏ qua nếu cột là số nguyên thuần túy hoặc số lượng
+        c_low = str(c).lower()
+        if any(k in c_low for k in ['so_thang', 'so_ngay', 'so_nam', 'thoi_han', 'so_ky', 'duration', 'id', 'ma_']):
+            continue
+        # Bỏ qua nếu chỉ là tên loại hình như Chu kỳ thu chứa 'Năm', 'Tháng'
+        if any(k in c_low for k in ['chu_ky', 'loai_ky', 'tan_suat', 'frequency']) and df[c].nunique() <= 5:
+            continue
+        # Thử parse giá trị mẫu
+        sample = df[c].dropna().head(30)
+        if len(sample) == 0:
+            continue
+        try:
+            parsed = pd.to_datetime(sample, errors='coerce')
+            valid_ratio = parsed.notna().sum() / len(sample)
+            if valid_ratio >= 0.7 and df[c].nunique() >= 2:
+                return c
+        except Exception:
+            pass
+    return None
+
 def inspect_dataset_columns(df: pd.DataFrame) -> Dict[str, Any]:
     """
     Nhận diện toàn diện các cột thực tế của bộ dữ liệu phục vụ trực tiếp cho việc vẽ biểu đồ chuyên sâu.
@@ -536,7 +559,10 @@ def inspect_dataset_columns(df: pd.DataFrame) -> Dict[str, Any]:
     cols = df.columns.tolist()
     numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
     
-    rev_col = next((c for c in numeric_cols if any(w in norm(c) for w in ['doanh thu', 'revenue', 'sales', 'tien hang'])), None)
+    # Tìm cột thời gian thật bằng parser ngày tháng
+    actual_time_col = detect_actual_datetime_column(df)
+    
+    rev_col = next((c for c in numeric_cols if any(w in norm(c) for w in ['doanh thu', 'revenue', 'sales', 'tien hang', 'tien thu truoc'])), None)
     if not rev_col and numeric_cols:
         rev_col = numeric_cols[0]
         
@@ -547,14 +573,17 @@ def inspect_dataset_columns(df: pd.DataFrame) -> Dict[str, Any]:
     area_col = next((c for c in numeric_cols if any(w in norm(c) for w in ['dien tich', 'area', 'm2'])), None)
     disc_col = next((c for c in numeric_cols if any(w in norm(c) for w in ['chiet khau', 'discount', 'giam gia'])), None)
     
-    store_col = next((c for c in cols if any(w in norm(c) for w in ['cua hang', 'chi nhanh', 'store', 'shop', 'branch', 'diem ban', 'kho'])), None)
-    region_col = next((c for c in cols if any(w in norm(c) for w in ['khu vuc', 'mien', 'region', 'city', 'tinh', 'vung', 'dia ban'])), None)
-    channel_col = next((c for c in cols if any(w in norm(c) for w in ['kenh', 'channel', 'platform', 'nguon', 'kenh ban']) and c != store_col and c != region_col), None)
+    store_col = next((c for c in cols if any(w in norm(c) for w in ['cua hang', 'chi nhanh', 'store', 'shop', 'branch', 'diem ban', 'kho', 'hop dong', 'ma hop dong'])), None)
+    region_col = next((c for c in cols if any(w in norm(c) for w in ['khu vuc', 'mien', 'region', 'city', 'tinh', 'vung', 'dia ban', 'chu ky thu', 'loai tru'])), None)
+    channel_col = next((c for c in cols if any(w in norm(c) for w in ['kenh', 'channel', 'platform', 'nguon', 'kenh ban', 'chu ky']) and c != store_col and c != region_col), None)
     prod_col = next((c for c in cols if any(w in norm(c) for w in ['san pham', 'mat hang', 'product', 'item', 'danh muc', 'category', 'sku']) and c not in [store_col, region_col, channel_col]), None)
-    time_col = next((c for c in cols if any(w in norm(c) for w in ['thang', 'ngay', 'date', 'month', 'year', 'nam', 'ky', 'quy', 'time', 'period'])), None)
+    
+    time_col = actual_time_col
+    if not time_col:
+        time_col = next((c for c in cols if c not in numeric_cols and any(w in norm(c) for w in ['ngay', 'date', 'thang', 'month', 'year', 'nam']) and not any(k in norm(c) for k in ['so thang', 'so ngay', 'chu ky'])), None)
     
     cat_cols = [c for c in cols if c not in numeric_cols and c != time_col]
-    dim1 = store_col or region_col or channel_col or prod_col or (cat_cols[0] if cat_cols else None)
+    dim1 = region_col or channel_col or store_col or prod_col or (cat_cols[0] if cat_cols else None)
     dim2 = None
     for c in [channel_col, prod_col, region_col, store_col] + cat_cols:
         if c and c != dim1:
@@ -940,6 +969,94 @@ def build_rich_charts_suite(
             return None
 
     # -------------------------------------------------------------------------------------------------
+    # -------------------------------------------------------------------------------------------------
+    # KỊCH BẢN 0: XỬ LÝ CHUYÊN BIỆT THEO HƯỚNG PHÂN TÍCH (d1, d2, d3, d4)
+    # -------------------------------------------------------------------------------------------------
+    if direction in ('d1', 'co_cau_thanh_phan'):
+        d_reg = reg_c or (dim2 if dim2 and df[dim2].nunique() <= 8 else dim1)
+        m_rev = rev_c or metric1
+        if d_reg and m_rev:
+            c1 = make_dimension_donut_chart(d_reg, m_rev, chart_id='chart_d1_donut')
+            if c1: add_chart(c1)
+            c2 = make_dimension_bar_chart(d_reg, m_rev, chart_id='chart_d1_bar')
+            if c2: add_chart(c2)
+        if charts:
+            return charts
+
+    elif direction in ('d2', 'xep_hang_tap_trung'):
+        d_store = store_c or dim1
+        m_prof = prof_c or metric2 or metric1
+        if d_store and m_prof:
+            c1 = make_dimension_bar_chart(d_store, m_prof, chart_id='chart_d2_prof', force_loss=True)
+            if c1: 
+                c1['chart_type'] = 'horizontalBar'
+                add_chart(c1)
+            c2 = make_cost_structure_chart(d_store, [rent_c, sal_c, cost_c], chart_id='chart_d2_costs')
+            if c2: add_chart(c2)
+        if charts:
+            return charts
+
+    elif direction in ('d3', 'xu_huong_chu_ky'):
+        m_rev = rev_c or metric1
+        if time_c and m_rev:
+            c1 = make_time_line_chart(time_c, m_rev, prof_c, chart_id='chart_d3_time')
+            if c1: add_chart(c1)
+            c2 = make_dimension_bar_chart(time_c, m_rev, chart_id='chart_d3_mom')
+            if c2: add_chart(c2)
+        if charts:
+            return charts
+
+    elif direction in ('d4', 'chenh_lech_hai_chi_so'):
+        d_store = store_c or dim1
+        m_rev = rev_c or metric1
+        m_cost = cost_c or rent_c or sal_c or metric2
+        if d_store and m_rev and m_cost:
+            c1 = make_dual_metric_grouped_bar(d_store, m_rev, m_cost, chart_id='chart_d4_rev_cost')
+            if c1: add_chart(c1)
+            c2 = make_cost_structure_chart(d_store, [rent_c, sal_c, cost_c], chart_id='chart_d4_costs')
+            if c2: add_chart(c2)
+        if charts:
+            return charts
+
+    elif direction in ('all_comprehensive', 'toan_dien'):
+        # PHÂN TÍCH TOÀN DIỆN: BẮT BUỘC SINH ĐỦ 5-6 BIỂU ĐỒ ĐA CHIỀU
+        d_store = store_c or dim1
+        d_reg = reg_c or (dim2 if dim2 and df[dim2].nunique() <= 8 else dim1)
+        m_rev = rev_c or metric1
+        m_prof = prof_c or metric2
+        m_cost = cost_c or rent_c or sal_c
+        
+        # 1. Bar doanh thu theo cửa hàng
+        if d_store and m_rev:
+            c1 = make_dimension_bar_chart(d_store, m_rev, chart_id='chart_comp_store_rev')
+            if c1: add_chart(c1)
+        # 2. Donut cơ cấu theo khu vực
+        if d_reg and m_rev:
+            c2 = make_dimension_donut_chart(d_reg, m_rev, chart_id='chart_comp_reg_rev')
+            if c2: add_chart(c2)
+        # 3. Line xu hướng theo tháng
+        if time_c and m_rev:
+            c3 = make_time_line_chart(time_c, m_rev, m_prof, chart_id='chart_comp_time_trend')
+            if c3: add_chart(c3)
+        # 4. Bar lợi nhuận xếp hạng lãi lỗ
+        if d_store and m_prof:
+            c4 = make_dimension_bar_chart(d_store, m_prof, chart_id='chart_comp_store_prof', force_loss=True)
+            if c4:
+                c4['chart_type'] = 'horizontalBar'
+                add_chart(c4)
+        # 5. Đối chiếu doanh thu vs chi phí
+        if d_store and m_rev and m_cost:
+            c5 = make_dual_metric_grouped_bar(d_store, m_rev, m_cost, chart_id='chart_comp_dual_cost')
+            if c5: add_chart(c5)
+        # 6. Cơ cấu chi phí
+        if d_store and (rent_c or sal_c or cost_c):
+            c6 = make_cost_structure_chart(d_store, [rent_c, sal_c, cost_c], chart_id='chart_comp_costs')
+            if c6: add_chart(c6)
+            
+        if charts:
+            return charts
+
+    
     # KỊCH BẢN 1: THEO YÊU CẦU RIÊNG CỦA NGƯỜI DÙNG (UNIVERSAL SEMANTIC QUERY ENGINE)
     # Tự động nhận diện mọi thực thể, chỉ số và chiều phân tích mà người dùng nhắc tới trong bảng dữ liệu
     # -------------------------------------------------------------------------------------------------
@@ -1030,37 +1147,29 @@ def build_rich_charts_suite(
                 return time_c
             return None
 
-        # DUYỆT TỪNG YÊU CẦU CỦA NGƯỜI DÙNG ĐỂ SINH BIỂU ĐỒ CHUYÊN BIỆT
+        # DUYỆT TỪNG YÊU CẦU CỦA NGƯỜI DÙNG ĐỂ SINH BIỂU ĐỒ CHUYÊN BIỆT (CHỐNG TRÙNG LẶP TUYỆT ĐỐI)
         used_signatures = set()
+        used_metrics_per_dim = {}
         
         for q_idx, q_item in enumerate(raw_items, 1):
             qn = norm(q_item)
             q_metric = universal_find_metric(q_item)
             q_dim = universal_find_dim(q_item)
-            q_time = universal_find_time(q_item)
             
-            # 1. Ý đồ: Chuỗi thời gian / Xu hướng / Biến động tăng giảm
-            if q_time and any(w in qn for w in ['thang', 'ngay', 'date', 'month', 'chu ky', 'xu huong', 'trend', 'tang giam', 'bien dong']):
-                sub_m = prof_c if (prof_c and q_metric != prof_c) else (num_cols[1] if len(num_cols) > 1 and num_cols[1] != q_metric else None)
-                sig = f"time_{q_metric}"
-                if sig in used_signatures and sub_m:
-                    q_metric = sub_m
-                    sub_m = None
-                    sig = f"time_{q_metric}_2"
-                used_signatures.add(sig)
-                
-                c = make_time_line_chart(q_time, q_metric, sub_m, chart_id=f"chart_q_time_{q_idx}")
-                if c:
-                    c['title'] = f"Diễn Biến {clean_vietnamese_column_title(q_metric)} Theo Chu Kỳ {clean_vietnamese_column_title(q_time)}"
-                    c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
-                    c['agent_reason'] = f"Agent trực quan hóa chu kỳ biến động của {q_metric} qua từng {q_time} để giải quyết yêu cầu về xu hướng."
-                    add_chart(c)
-                    continue
+            # Kiểm tra xem có cột thời gian thật trong câu hỏi không
+            q_time = None
+            if time_c and (norm(time_c) in qn or any(w in qn for w in ['thoi gian', 'theo ngay', 'theo thang', 'chuoi thoi gian'])):
+                q_time = time_c
 
-            # 2. Ý đồ: Cơ cấu tỷ trọng / Chiếm phần lớn / Phân bổ tổng thể
+            # 1. Ý đồ: Cơ cấu tỷ trọng / Chiếm phần lớn / Phân bổ tổng thể (ƯU TIÊN HÀNG ĐẦU)
             if any(w in qn for w in ['chiem phan lon', 'phan lon', 'ty trong', 'co cau', 'tong', 'dong gop']):
                 target_d = q_dim or reg_c or dim1
                 sig = f"donut_{target_d}_{q_metric}"
+                if sig in used_signatures:
+                    # Đổi sang metric khác nếu có
+                    alt_m = next((m for m in num_cols if m != q_metric), q_metric)
+                    q_metric = alt_m
+                    sig = f"donut_{target_d}_{q_metric}"
                 used_signatures.add(sig)
                 
                 c = make_dimension_donut_chart(target_d, q_metric, chart_id=f"chart_q_donut_{q_idx}")
@@ -1071,57 +1180,65 @@ def build_rich_charts_suite(
                     add_chart(c)
                     continue
 
-            # 3. Ý đồ: Phân tích Lợi nhuận / Lãi / Lỗ hoặc các chỉ số phân hóa âm dương
-            if any(w in qn for w in ['loi nhuan', 'lai', 'lo', 'thua lo', 'am']):
-                target_d = q_dim or store_c or dim1
-                target_m = prof_c or q_metric
-                sig = f"bar_loss_{target_d}_{target_m}"
+            # 2. Ý đồ: So sánh / Đơn vị nào cao nhất / thấp nhất / phân hóa
+            if any(w in qn for w in ['cao nhat', 'thap nhat', 'so sanh', 'top', 'bottom', 'nao cao', 'nao thap', 'phan hoa']):
+                target_d = q_dim or dim1
+                # Nếu target_d trùng với biểu đồ trước và cùng metric -> đổi metric
+                if used_metrics_per_dim.get(target_d) == q_metric:
+                    alt_m = next((m for m in num_cols if m != q_metric), q_metric)
+                    q_metric = alt_m
+                used_metrics_per_dim[target_d] = q_metric
+                
+                sig = f"bar_{target_d}_{q_metric}"
                 used_signatures.add(sig)
                 
-                c = make_dimension_bar_chart(target_d, target_m, chart_id=f"chart_q_profit_{q_idx}", force_loss=True)
+                c = make_dimension_bar_chart(target_d, q_metric, chart_id=f"chart_q_bar_{q_idx}")
                 if c:
-                    c['title'] = f"Phân Tích {clean_vietnamese_column_title(target_m)} Giữa Các {clean_vietnamese_column_title(target_d)}"
+                    c['title'] = f"So Sánh {clean_vietnamese_column_title(q_metric)} Theo {clean_vietnamese_column_title(target_d)}"
                     c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
-                    c['agent_reason'] = f"Agent đánh giá biên độ và mức độ phân hóa {target_m} giữa từng {target_d} theo dữ liệu thực tế."
+                    c['agent_reason'] = f"Agent so sánh quy mô {q_metric} giữa các {target_d} để trả lời yêu cầu."
                     add_chart(c)
                     continue
 
-            # 4. Ý đồ: So sánh / Đơn vị nào cao nhất / Thấp nhất / Giữa các...
-            target_d = q_dim or store_c or reg_c or dim1
-            sig = f"bar_{target_d}_{q_metric}"
-            
-            # Nếu đã có biểu đồ Bar đơn cho cặp này rồi, biến tấu sang biểu đồ ma trận phối hợp hoặc đối chiếu 2 chỉ số
-            if sig in used_signatures:
-                other_d = [c for c in non_num_cols if c != target_d]
-                if other_d:
-                    sec_d = other_d[0]
-                    c = make_grouped_bar_matrix_chart(target_d, sec_d, q_metric, chart_id=f"chart_q_matrix_{q_idx}")
-                    if c:
-                        c['title'] = f"Phân Bổ {clean_vietnamese_column_title(q_metric)} Chi Tiết Của Từng {clean_vietnamese_column_title(sec_d)} Trong Mỗi {clean_vietnamese_column_title(target_d)}"
-                        c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
-                        c['agent_reason'] = f"Agent phân tích đa chiều chuyên sâu bóc tách cơ cấu {sec_d} trong từng {target_d}."
-                        add_chart(c)
-                        used_signatures.add(f"matrix_{target_d}_{sec_d}")
-                        continue
-                elif len(num_cols) > 1:
-                    sec_m = [c for c in num_cols if c != q_metric][0]
-                    c = make_cost_structure_chart(target_d, [q_metric, sec_m], chart_id=f"chart_q_comp_{q_idx}")
-                    if c:
-                        c['title'] = f"Đối Chiếu {clean_vietnamese_column_title(q_metric)} vs {clean_vietnamese_column_title(sec_m)} Theo {clean_vietnamese_column_title(target_d)}"
-                        c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
-                        add_chart(c)
-                        used_signatures.add(f"comp_{target_d}")
-                        continue
+            # 3. Ý đồ: Chuỗi thời gian / Xu hướng / Biến động tăng giảm (CHỈ KHI CÓ CỘT THỜI GIAN THẬT)
+            if q_time and any(w in qn for w in ['tang giam', 'bien dong', 'xu huong', 'trend']):
+                sig = f"time_{q_metric}_{q_time}"
+                if sig in used_signatures:
+                    alt_m = next((m for m in num_cols if m != q_metric), q_metric)
+                    q_metric = alt_m
+                    sig = f"time_{q_metric}_{q_time}"
+                used_signatures.add(sig)
+                
+                c = make_time_line_chart(q_time, q_metric, chart_id=f"chart_q_time_{q_idx}")
+                if c:
+                    c['title'] = f"Diễn Biến {clean_vietnamese_column_title(q_metric)} Theo Chu Kỳ {clean_vietnamese_column_title(q_time)}"
+                    c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
+                    c['agent_reason'] = f"Agent trực quan hóa chu kỳ biến động của {q_metric} qua từng {q_time} để làm rõ xu hướng."
+                    add_chart(c)
+                    continue
 
+            # 4. Fallback: Vẽ Bar theo phân loại hoặc Line theo thời gian
+            target_d = q_dim or (time_c if time_c else dim1)
+            sig = f"fallback_{target_d}_{q_metric}"
+            if sig in used_signatures:
+                alt_m = next((m for m in num_cols if m != q_metric), q_metric)
+                q_metric = alt_m
+                sig = f"fallback_{target_d}_{q_metric}"
             used_signatures.add(sig)
-            c = make_dimension_bar_chart(target_d, q_metric, chart_id=f"chart_q_bar_{q_idx}")
+
+            # Nếu target_d là ngày tháng thực sự và có >= 3 mốc -> vẽ Line, nếu không vẽ Bar
+            if target_d == time_c and df[target_d].nunique() >= 3:
+                c = make_time_line_chart(target_d, q_metric, chart_id=f"chart_q_gen_{q_idx}")
+            else:
+                c = make_dimension_bar_chart(target_d, q_metric, chart_id=f"chart_q_gen_{q_idx}")
+                
             if c:
-                c['title'] = f"So Sánh {clean_vietnamese_column_title(q_metric)} Theo {clean_vietnamese_column_title(target_d)}"
+                c['title'] = f"Phân Tích {clean_vietnamese_column_title(q_metric)} Theo {clean_vietnamese_column_title(target_d)}"
                 c['subtitle'] = f"Trả lời trực tiếp yêu cầu: \"{q_item}\""
-                c['agent_reason'] = f"Agent so sánh quy mô {q_metric} giữa các {target_d} nhằm làm rõ đơn vị đạt mức cao nhất và thấp nhất."
+                c['agent_reason'] = f"Agent phân tích mối liên hệ giữa {clean_vietnamese_column_title(q_metric)} và {clean_vietnamese_column_title(target_d)} theo yêu cầu."
                 add_chart(c)
 
-    # -------------------------------------------------------------------------------------------------
+
     # KỊCH BẢN 2: THEO ĐỊNH HƯỚNG ĐƯỢC CHỌN (HOẶC BỔ SUNG NẾU CHƯA ĐỦ 3-4 BIỂU ĐỒ)
     # -------------------------------------------------------------------------------------------------
     if len(charts) < 3:

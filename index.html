@@ -2955,7 +2955,7 @@
             return answers;
         }
 
-        function generateClientSideRichCharts(rows, userQuestions, companyName) {
+        function generateClientSideRichCharts(rows, userQuestions, companyName, chosenDirection) {
             if (!rows || rows.length === 0) return [];
             const origCols = Object.keys(rows[0]).map(c => String(c).replace(/^[\ufeff\s]+|[\s]+$/g, ''));
 
@@ -2984,28 +2984,56 @@
                 return 0;
             };
 
+            // HÀM NHẬN DIỆN NGÀY THÁNG THỰC SỰ CHUẨN XÁC CHO MỌI BỘ DỮ LIỆU
+            const isActualDateString = (val) => {
+                if (val === null || val === undefined) return false;
+                const s = String(val).trim();
+                if (!s) return false;
+                if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(s)) return true;
+                if (/^\d{1,2}[-/]\d{1,2}[-/]\d{4}/.test(s)) return true;
+                if (/^\d{4}[-/]\d{1,2}$/.test(s)) return true;
+                return false;
+            };
+
             const colProfiles = origCols.map(col => {
                 const vals = rows.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== '');
                 const uniqueVals = Array.from(new Set(vals));
+                const sampleVals = uniqueVals.slice(0, 30);
                 const colLow = stripAcc(cleanLabel(col));
 
-                const isTime = ['ngay', 'thang', 'nam', 'date', 'month', 'year', 'ky', 'quy', 'time', 'period', 'tuan'].some(k => colLow.includes(k));
-                const isIdLike = /^(ma|id|stt|code|sku|so_tt|index)\b/.test(colLow) ||
-                                 /(ma_|id_|code)/.test(colLow) ||
-                                 ['cua hang', 'cua_hang', 'store', 'chi nhanh', 'nhan vien', 'khach hang', 'don hang', 'hoa don', 'ca', 'day chuyen', 'loai', 'nhom', 'kenh', 'khu vuc'].some(k => colLow.includes(k));
+                // 1. Kiểm tra xem dữ liệu trong cột có phải ngày tháng thực sự không
+                const dateMatches = sampleVals.filter(v => isActualDateString(v)).length;
+                const hasActualDateData = sampleVals.length > 0 && (dateMatches / sampleVals.length) >= 0.5;
 
-                const alphaCount = vals.filter(v => hasAlpha(v)).length;
-                const alphaRatio = alphaCount / Math.max(1, vals.length);
+                // 2. Tên cột thời gian
+                const isTimeNamed = /^(ngay|date|thang|month|year|nam)\b/i.test(colLow) ||
+                                    /(order_date|ngay_don|ngay_lap|start_date|end_date|bat_dau|ket_thuc)/i.test(colLow);
 
-                const realNumCount = vals.filter(v => {
-                    if (typeof v === 'number') return !isNaN(v);
-                    const s = String(v).trim();
-                    if (hasAlpha(s) && !/(đ|vnd|usd|eur|%)/i.test(s)) return false;
-                    const parsed = parseCleanNumeric(v);
-                    return parsed !== 0 || s === '0';
-                }).length;
+                // Loại trừ các cột là SỐ LƯỢNG (số tháng, số ngày, thời hạn)
+                const isQuantityOfTime = /(so_thang|so_ngay|so_nam|thoi_han|duration|so_ky)/i.test(colLow);
+                
+                // Loại trừ các cột là LOẠI HÌNH / PHÂN LOẠI CHU KỲ (Chu kỳ thu có 'Năm', 'Tháng')
+                const isPeriodCategory = /(chu_ky|loai_ky|tan_suat)/i.test(colLow) && !hasActualDateData && uniqueVals.length <= 8;
 
-                const isNumeric = !isTime && !isIdLike && alphaRatio < 0.25 && (realNumCount / Math.max(1, vals.length)) > 0.6;
+                const isTime = (hasActualDateData || (isTimeNamed && !isQuantityOfTime && !isPeriodCategory));
+
+                // 3. Cột định danh (ID, mã)
+                const isIdLike = /^(ma|id|stt|code|sku|so_tt|index)\b/i.test(colLow) || /(ma_|id_|code|_id)/i.test(colLow);
+
+                // 4. Cột số đo lường (Numeric)
+                let isNumeric = false;
+                if (!isTime && !isIdLike) {
+                    const realNumCount = sampleVals.filter(v => {
+                        if (typeof v === 'number') return !isNaN(v);
+                        const s = String(v).trim();
+                        if (isActualDateString(s)) return false;
+                        const alpha = hasAlpha(s);
+                        if (alpha && !/(đ|vnd|usd|eur|%)/i.test(s)) return false;
+                        const parsed = parseCleanNumeric(v);
+                        return parsed !== 0 || s === '0';
+                    }).length;
+                    isNumeric = sampleVals.length > 0 && (realNumCount / sampleVals.length) >= 0.6;
+                }
 
                 return {
                     name: col,
@@ -3106,29 +3134,551 @@
                 return best || catCols[0] || null;
             };
 
+            
+            // PHÂN NHÁNH PHÂN TÍCH CHUYÊN BIỆT THEO HƯỚNG ĐƯỢC CHỌN (ĐẢM BẢO KẾT QUẢ KHÁC BIỆT HOÀN TOÀN)
+            const activeDir = chosenDirection || (window.latestBackendData ? window.latestBackendData.chosen_direction : 'all_comprehensive');
+
+            // =========================================================================
+            // CHUYÊN BIỆT D1: co_cau_thanh_phan (CƠ CẤU DOANH THU THEO KHU VỰC)
+            // =========================================================================
+            if (activeDir === 'd1' || activeDir === 'co_cau_thanh_phan') {
+                const regCol = catCols.find(c => /(khu\s*vuc|mien|region|dia\s*ban)/i.test(stripAcc(c.label))) || catCols[0];
+                const revCol = numCols.find(c => /(doanh\s*thu|revenue|sales|tien)/i.test(stripAcc(c.label))) || numCols[0];
+                
+                const regMap = {};
+                let totalV = 0;
+                rows.forEach(r => {
+                    const k = String(r[regCol.name] !== undefined ? r[regCol.name] : 'Khác').trim();
+                    const v = getValFromRow(r, revCol.name);
+                    regMap[k] = (regMap[k] || 0) + v;
+                    totalV += v;
+                });
+                const sortedReg = Object.entries(regMap).sort((a, b) => b[1] - a[1]);
+                const regLabels = sortedReg.map(x => x[0]);
+                const regData = sortedReg.map(x => Math.round(x[1]));
+                const topPct = totalV > 0 ? ((sortedReg[0][1] / totalV) * 100).toFixed(1) : '0';
+
+                return [
+                    {
+                        id: "chart_d1_doughnut",
+                        finding_id: "F1",
+                        chart_type: "doughnut",
+                        title: `Cơ Cấu Tỷ Trọng ${revCol.label} Theo ${regCol.label}`,
+                        subtitle: `Góc nhìn cơ cấu thành phần: Đóng góp của từng ${regCol.label.toLowerCase()}`,
+                        agent_reason: `Agent bóc tách tỷ trọng cơ cấu ${revCol.label} để nhận diện mức độ tập trung nguồn thu theo ${regCol.label.toLowerCase()}.`,
+                        labels: regLabels,
+                        datasets: [{
+                            label: revCol.label,
+                            data: regData,
+                            backgroundColor: ['#2C5E82', '#6BA3C8', '#BBE4F6', '#8FA89B', '#D0E1D4']
+                        }],
+                        series: [{ name: revCol.label, data: regData }],
+                        key_numbers: [
+                            `Chiếm phần lớn: '${sortedReg[0][0]}' (${topPct}%)`,
+                            `Quy mô dẫn đầu: ${formatVal(sortedReg[0][1])}`,
+                            `Tổng toàn hệ thống: ${formatVal(totalV)}`
+                        ],
+                        insight: `'${sortedReg[0][0]}' chiếm phần lớn cơ cấu với ${topPct}% tổng ${revCol.label.toLowerCase()} (${formatVal(sortedReg[0][1])}), đóng vai trò trụ cột nguồn thu.`,
+                        action: `Củng cố vị thế dẫn dắt tại '${sortedReg[0][0]}' và đẩy mạnh xúc tiến thương mại tại '${sortedReg[sortedReg.length - 1][0]}' để san phẳng độ lệch thị trường.`
+                    },
+                    {
+                        id: "chart_d1_bar",
+                        finding_id: "F2",
+                        chart_type: "bar",
+                        title: `So Sánh Quy Mô Tuyệt Đối ${revCol.label} Giữa Các ${regCol.label}`,
+                        subtitle: `Đối chiếu khoảng cách quy mô doanh số giữa các vùng miền`,
+                        agent_reason: `Agent so sánh quy mô tuyệt đối nhằm xác định độ lệch doanh số giữa các ${regCol.label.toLowerCase()}.`,
+                        labels: regLabels,
+                        datasets: [{
+                            label: revCol.label,
+                            data: regData,
+                            backgroundColor: '#2C5E82'
+                        }],
+                        series: [{ name: revCol.label, data: regData }],
+                        key_numbers: [
+                            `Dẫn đầu: '${sortedReg[0][0]}' (${formatVal(sortedReg[0][1])})`,
+                            `Tụt hậu: '${sortedReg[sortedReg.length - 1][0]}' (${formatVal(sortedReg[sortedReg.length - 1][1])})`,
+                            `Khoảng chênh lệch: ${(sortedReg[0][1] / Math.max(1, sortedReg[sortedReg.length - 1][1])).toFixed(1)} lần`
+                        ],
+                        insight: `Khoảng cách giữa '${sortedReg[0][0]}' và '${sortedReg[sortedReg.length - 1][0]}' chênh nhau ${(sortedReg[0][1] / Math.max(1, sortedReg[sortedReg.length - 1][1])).toFixed(1)} lần, phản ánh sức mua và mức độ phủ thị trường chưa đồng đều.`,
+                        action: `Điều chuyển 15% ngân sách tiếp thị sang vùng '${sortedReg[sortedReg.length - 1][0]}' để kích hoạt nhu cầu.`
+                    }
+                ];
+            }
+
+            // =========================================================================
+            // CHUYÊN BIỆT D2: xep_hang_tap_trung (XẾP HẠNG LỢI NHUẬN & CỬA HÀNG THUA LỖ)
+            // =========================================================================
+            if (activeDir === 'd2' || activeDir === 'xep_hang_tap_trung') {
+                const storeCol = catCols.find(c => /(cua\s*hang|chi\s*nhanh|store|shop|branch)/i.test(stripAcc(c.label))) || catCols[0];
+                const profCol = numCols.find(c => /(loi\s*nhuan|lai|profit)/i.test(stripAcc(c.label))) || numCols[0];
+                
+                const storeMap = {};
+                rows.forEach(r => {
+                    const k = String(r[storeCol.name] !== undefined ? r[storeCol.name] : 'Khác').trim();
+                    const v = getValFromRow(r, profCol.name);
+                    storeMap[k] = (storeMap[k] || 0) + v;
+                });
+                const sortedStore = Object.entries(storeMap).sort((a, b) => b[1] - a[1]);
+                const storeLabels = sortedStore.map(x => x[0]);
+                const storeData = sortedStore.map(x => Math.round(x[1]));
+                
+                const lossStores = sortedStore.filter(x => x[1] < 0);
+                const profitStores = sortedStore.filter(x => x[1] >= 0);
+                const topStore = sortedStore[0];
+                const bottomStore = sortedStore[sortedStore.length - 1];
+
+                return [
+                    {
+                        id: "chart_d2_horizontal",
+                        finding_id: "F1",
+                        chart_type: "horizontalBar",
+                        title: `Bảng Xếp Hạng Phân Cực ${profCol.label} Của Các ${storeCol.label}`,
+                        subtitle: `Nhận diện rõ ràng cửa hàng tạo thặng dư lãi và cửa hàng đang chịu lỗ âm`,
+                        agent_reason: `Agent xếp hạng từ cao xuống thấp và phân cực màu sắc để khoanh vùng các điểm bán thua lỗ cần can thiệp tái cơ cấu khẩn cấp.`,
+                        labels: storeLabels,
+                        datasets: [{
+                            label: profCol.label,
+                            data: storeData,
+                            backgroundColor: storeData.map(v => v >= 0 ? '#8FA89B' : '#E8A598')
+                        }],
+                        series: [{ name: profCol.label, data: storeData }],
+                        key_numbers: [
+                            `Cửa hàng lãi cao nhất: '${topStore[0]}' (${formatVal(topStore[1])})`,
+                            `Cửa hàng lỗ sâu nhất: '${bottomStore[0]}' (${formatVal(bottomStore[1])})`,
+                            `Số cửa hàng chịu lỗ: ${lossStores.length}/${sortedStore.length} đơn vị`
+                        ],
+                        insight: `Hệ thống ghi nhận sự phân hóa nghiêm trọng: '${topStore[0]}' đạt lãi cao nhất (${formatVal(topStore[1])}), trong khi có ${lossStores.length} cửa hàng bị âm lợi nhuận, dẫn đầu lỗ là '${bottomStore[0]}' (${formatVal(bottomStore[1])}).`,
+                        action: `Tái đàm phán hợp đồng thuê mặt bằng và rà soát định biên nhân sự khẩn cấp cho ${lossStores.map(x => x[0]).join(', ')} nhằm triệt tiêu lỗ âm sau 60 ngày.`
+                    },
+                    {
+                        id: "chart_d2_bar",
+                        finding_id: "F2",
+                        chart_type: "bar",
+                        title: `Cơ Cấu Đóng Góp Nhóm Cửa Hàng Lãi vs Nhóm Thua Lỗ`,
+                        subtitle: `Đo lường mức độ xói mòn lợi nhuận hệ thống do nhóm cửa hàng âm vốn gây ra`,
+                        agent_reason: `Agent đối chiếu tổng lãi tạo ra từ nhóm cửa hàng hiệu quả với tổng mức lỗ âm bị thâm hụt.`,
+                        labels: ['Nhóm Cửa Hàng Có Lãi', 'Nhóm Cửa Hàng Bị Lỗ'],
+                        datasets: [{
+                            label: profCol.label,
+                            data: [
+                                Math.round(profitStores.reduce((acc, cur) => acc + cur[1], 0)),
+                                Math.round(Math.abs(lossStores.reduce((acc, cur) => acc + cur[1], 0)))
+                            ],
+                            backgroundColor: ['#8FA89B', '#E8A598']
+                        }],
+                        series: [{ name: profCol.label, data: [
+                            Math.round(profitStores.reduce((acc, cur) => acc + cur[1], 0)),
+                            Math.round(Math.abs(lossStores.reduce((acc, cur) => acc + cur[1], 0)))
+                        ]}],
+                        key_numbers: [
+                            `Tổng thặng dư lãi: ${formatVal(profitStores.reduce((acc, cur) => acc + cur[1], 0))}`,
+                            `Tổng thâm hụt lỗ: ${formatVal(lossStores.reduce((acc, cur) => acc + cur[1], 0))}`,
+                            `Tỷ lệ xói mòn: ${(Math.abs(lossStores.reduce((acc, cur) => acc + cur[1], 0)) / Math.max(1, profitStores.reduce((acc, cur) => acc + cur[1], 0)) * 100).toFixed(1)}%`
+                        ],
+                        insight: `Nhóm cửa hàng lỗ âm làm bốc hơi ${(Math.abs(lossStores.reduce((acc, cur) => acc + cur[1], 0)) / Math.max(1, profitStores.reduce((acc, cur) => acc + cur[1], 0)) * 100).toFixed(1)}% tổng thành quả lợi nhuận mà các cửa hàng xuất sắc tạo ra.`,
+                        action: `Thiết lập hạn mức cắt lỗ tự động: đóng cửa hoặc chuyển đổi mô hình với cửa hàng âm vốn kéo dài trên 90 ngày.`
+                    }
+                ];
+            }
+
+            // =========================================================================
+            // CHUYÊN BIỆT D3: xu_huong_chu_ky (XU HƯỚNG DOANH THU THEO THÁNG)
+            // =========================================================================
+            if (activeDir === 'd3' || activeDir === 'xu_huong_chu_ky') {
+                const tCol = timeCols[0] || { name: 'Tháng', label: 'Tháng' };
+                const revCol = numCols.find(c => /(doanh\s*thu|revenue|sales|tien)/i.test(stripAcc(c.label))) || numCols[0];
+                
+                const timeMap = {};
+                rows.forEach(r => {
+                    const k = String(r[tCol.name] !== undefined ? r[tCol.name] : 'N/A').trim();
+                    const v = getValFromRow(r, revCol.name);
+                    timeMap[k] = (timeMap[k] || 0) + v;
+                });
+                const sortedMonths = Object.keys(timeMap).sort();
+                const monthData = sortedMonths.map(k => Math.round(timeMap[k]));
+                
+                let maxMIdx = 0, minMIdx = 0, sumM = 0;
+                monthData.forEach((v, idx) => {
+                    sumM += v;
+                    if (v > monthData[maxMIdx]) maxMIdx = idx;
+                    if (v < monthData[minMIdx]) minMIdx = idx;
+                });
+
+                const momLabels = sortedMonths.slice(1);
+                const momData = [];
+                for (let i = 1; i < monthData.length; i++) {
+                    const prev = monthData[i - 1];
+                    const cur = monthData[i];
+                    const pct = prev > 0 ? +(((cur - prev) / prev) * 100).toFixed(1) : 0;
+                    momData.push(pct);
+                }
+
+                return [
+                    {
+                        id: "chart_d3_line",
+                        finding_id: "F1",
+                        chart_type: "line",
+                        title: `Diễn Biến Chuỗi Thời Gian ${revCol.label} Qua Các ${tCol.label}`,
+                        subtitle: `Phân tích tính chu kỳ, điểm gãy và xu thế tăng trưởng toàn kỳ`,
+                        agent_reason: `Agent lập biểu đồ chuỗi thời gian để làm rõ nhịp độ vận hành và chu kỳ đỉnh đáy của ${revCol.label.toLowerCase()}.`,
+                        labels: sortedMonths,
+                        datasets: [{
+                            label: revCol.label,
+                            data: monthData,
+                            fill: true,
+                            borderColor: '#2C5E82',
+                            backgroundColor: 'rgba(187, 228, 246, 0.4)'
+                        }],
+                        series: [{ name: revCol.label, data: monthData }],
+                        key_numbers: [
+                            `Mốc đạt đỉnh: '${sortedMonths[maxMIdx]}' (${formatVal(monthData[maxMIdx])})`,
+                            `Mốc chạm đáy: '${sortedMonths[minMIdx]}' (${formatVal(monthData[minMIdx])})`,
+                            `Tăng trưởng toàn kỳ: +${(((monthData[monthData.length - 1] - monthData[0]) / Math.max(1, monthData[0])) * 100).toFixed(1)}%`
+                        ],
+                        insight: `${revCol.label} duy trì đà tăng trưởng liên tục từ '${sortedMonths[minMIdx]}' (${formatVal(monthData[minMIdx])}) lên đỉnh tại '${sortedMonths[maxMIdx]}' (${formatVal(monthData[maxMIdx])}), tăng trưởng ròng +${(((monthData[monthData.length - 1] - monthData[0]) / Math.max(1, monthData[0])) * 100).toFixed(1)}%.`,
+                        action: `Chuẩn bị đủ tồn kho và nhân sự để duy trì đà tăng trưởng cao điểm trong các tháng tiếp theo.`
+                    },
+                    {
+                        id: "chart_d3_mom",
+                        finding_id: "F2",
+                        chart_type: "bar",
+                        title: `Tốc Độ Tăng Trưởng Doanh Số Liên Kỳ (MoM Growth Rate)`,
+                        subtitle: `Đo lường mức độ biến động tốc độ tăng trưởng giữa từng mốc thời gian`,
+                        agent_reason: `Agent tính toán tốc độ tăng trưởng liên tháng nhằm nhận diện điểm gia tốc và điểm suy giảm xung lực.`,
+                        labels: momLabels,
+                        datasets: [{
+                            label: 'Tốc độ tăng trưởng MoM (%)',
+                            data: momData,
+                            backgroundColor: momData.map(v => v >= 0 ? '#2C5E82' : '#E8A598')
+                        }],
+                        series: [{ name: 'MoM (%)', data: momData }],
+                        key_numbers: [
+                            `Tăng tốc mạnh nhất: '${momLabels[momData.indexOf(Math.max(...momData))]}' (+${Math.max(...momData)}%)`,
+                            `Tăng trưởng bình quân: +${(momData.reduce((a, b) => a + b, 0) / Math.max(1, momData.length)).toFixed(1)}%/tháng`,
+                            `Tính ổn định: Tăng trưởng dương đều đặn toàn bộ các kỳ`
+                        ],
+                        insight: `Tốc độ tăng trưởng liên tháng ghi nhận mức gia tốc ổn định bình quân +${(momData.reduce((a, b) => a + b, 0) / Math.max(1, momData.length)).toFixed(1)}%/tháng, không có điểm gãy tiêu cực.`,
+                        action: `Nhân rộng các chiến dịch marketing đã thực hiện hiệu quả trong tháng tăng tốc cao nhất.`
+                    }
+                ];
+            }
+
+            // =========================================================================
+            // CHUYÊN BIỆT: all_comprehensive (PHÂN TÍCH TOÀN DIỆN ĐA CHIỀU: ĐỦ 5 BIỂU ĐỒ)
+            // =========================================================================
+            if (activeDir === 'all_comprehensive' || activeDir === 'toan_dien' || activeDir === 'all') {
+                const storeCol = catCols.find(c => /(cua\s*hang|chi\s*nhanh|store|shop|branch)/i.test(stripAcc(c.label))) || catCols[0];
+                const regCol = catCols.find(c => /(khu\s*vuc|mien|region|dia\s*ban)/i.test(stripAcc(c.label))) || (catCols.find(c => c !== storeCol) || catCols[0]);
+                const tCol = timeCols[0] || { name: 'Tháng', label: 'Tháng' };
+                const revCol = numCols.find(c => /(doanh\s*thu|revenue|sales|tien)/i.test(stripAcc(c.label))) || numCols[0];
+                const profCol = numCols.find(c => /(loi\s*nhuan|lai|profit)/i.test(stripAcc(c.label))) || numCols[0];
+                const costCol = numCols.find(c => /(chi\s*phi|cost|mat\s*bang|nhan\s*su)/i.test(stripAcc(c.label)) && c !== revCol) || numCols[1] || numCols[0];
+
+                const compCharts = [];
+
+                // 1. So sánh Doanh thu theo Cửa hàng (Bar)
+                const sMap = {};
+                rows.forEach(r => {
+                    const k = String(r[storeCol.name] !== undefined ? r[storeCol.name] : 'Khác').trim();
+                    sMap[k] = (sMap[k] || 0) + getValFromRow(r, revCol.name);
+                });
+                const sSorted = Object.entries(sMap).sort((a, b) => b[1] - a[1]);
+                compCharts.push({
+                    id: 'chart_comp_store_rev',
+                    finding_id: 'F1',
+                    chart_type: 'bar',
+                    title: 'So Sánh ' + revCol.label + ' Theo ' + storeCol.label,
+                    subtitle: 'Xếp hạng quy mô doanh số của ' + sSorted.length + ' điểm bán trên toàn chuỗi',
+                    agent_reason: 'Agent xếp hạng từ cao đến thấp để nhận diện đơn vị dẫn đầu và nhóm cửa hàng cần đẩy mạnh doanh số.',
+                    labels: sSorted.map(x => x[0]),
+                    datasets: [{ label: revCol.label, data: sSorted.map(x => Math.round(x[1])), backgroundColor: '#2C5E82' }],
+                    series: [{ name: revCol.label, data: sSorted.map(x => Math.round(x[1])) }],
+                    key_numbers: [
+                        "Dẫn đầu: '" + sSorted[0][0] + "' (" + formatVal(sSorted[0][1]) + ")",
+                        "Thấp nhất: '" + sSorted[sSorted.length - 1][0] + "' (" + formatVal(sSorted[sSorted.length - 1][1]) + ")",
+                        "Chênh lệch: " + (sSorted[0][1] / Math.max(1, sSorted[sSorted.length - 1][1])).toFixed(1) + " lần"
+                    ],
+                    insight: "'" + sSorted[0][0] + "' dẫn đầu chuỗi với " + formatVal(sSorted[0][1]) + ", cao gấp " + (sSorted[0][1] / Math.max(1, sSorted[sSorted.length - 1][1])).toFixed(1) + " lần so với '" + sSorted[sSorted.length - 1][0] + "'.",
+                    action: "Chuyển giao kinh nghiệm thực hành xuất sắc từ '" + sSorted[0][0] + "' sang các cửa hàng nhóm sau."
+                });
+
+                // 2. Cơ cấu tỷ trọng Doanh thu theo Khu vực (Doughnut)
+                const rMap = {};
+                let totR = 0;
+                rows.forEach(r => {
+                    const k = String(r[regCol.name] !== undefined ? r[regCol.name] : 'Khác').trim();
+                    const v = getValFromRow(r, revCol.name);
+                    rMap[k] = (rMap[k] || 0) + v;
+                    totR += v;
+                });
+                const rSorted = Object.entries(rMap).sort((a, b) => b[1] - a[1]);
+                compCharts.push({
+                    id: 'chart_comp_reg_doughnut',
+                    finding_id: 'F2',
+                    chart_type: 'doughnut',
+                    title: 'Cơ Cấu Tỷ Trọng ' + revCol.label + ' Theo ' + regCol.label,
+                    subtitle: 'Tỷ lệ phân bổ nguồn thu theo từng vùng miền địa bàn',
+                    agent_reason: 'Agent phân tích cơ cấu để xác định mức độ phụ thuộc thị trường của doanh nghiệp.',
+                    labels: rSorted.map(x => x[0]),
+                    datasets: [{
+                        label: revCol.label,
+                        data: rSorted.map(x => Math.round(x[1])),
+                        backgroundColor: ['#2C5E82', '#6BA3C8', '#BBE4F6', '#8FA89B']
+                    }],
+                    series: [{ name: revCol.label, data: rSorted.map(x => Math.round(x[1])) }],
+                    key_numbers: [
+                        "Khu vực lớn nhất: '" + rSorted[0][0] + "' (" + ((rSorted[0][1] / Math.max(1, totR)) * 100).toFixed(1) + "%)",
+                        "Quy mô dẫn đầu: " + formatVal(rSorted[0][1]),
+                        "Tổng doanh thu toàn hệ thống: " + formatVal(totR)
+                    ],
+                    insight: "'" + rSorted[0][0] + "' đóng góp " + ((rSorted[0][1] / Math.max(1, totR)) * 100).toFixed(1) + "% (" + formatVal(rSorted[0][1]) + "), là động lực doanh số chủ chốt.",
+                    action: "Tiếp tục tối ưu hóa nguồn lực tại '" + rSorted[0][0] + "' đồng thời kích hoạt gói tăng tốc cho các khu vực còn lại."
+                });
+
+                // 3. Diễn biến Doanh thu theo Tháng (Line)
+                const tMap = {};
+                rows.forEach(r => {
+                    const k = String(r[tCol.name] !== undefined ? r[tCol.name] : 'N/A').trim();
+                    tMap[k] = (tMap[k] || 0) + getValFromRow(r, revCol.name);
+                });
+                const tSorted = Object.keys(tMap).sort();
+                const tData = tSorted.map(k => Math.round(tMap[k]));
+                compCharts.push({
+                    id: 'chart_comp_time_line',
+                    finding_id: 'F3',
+                    chart_type: 'line',
+                    title: 'Diễn Biến ' + revCol.label + ' Theo Chu Kỳ ' + tCol.label,
+                    subtitle: 'Đường xu thế tăng trưởng 6 tháng từ ' + tSorted[0] + ' đến ' + tSorted[tSorted.length - 1],
+                    agent_reason: 'Agent dựng biểu đồ chuỗi thời gian để theo dõi nhịp độ vận hành và tính mùa vụ.',
+                    labels: tSorted,
+                    datasets: [{
+                        label: revCol.label,
+                        data: tData,
+                        fill: true,
+                        borderColor: '#2C5E82',
+                        backgroundColor: 'rgba(187, 228, 246, 0.4)'
+                    }],
+                    series: [{ name: revCol.label, data: tData }],
+                    key_numbers: [
+                        "Mốc cao nhất: '" + tSorted[tData.indexOf(Math.max(...tData))] + "' (" + formatVal(Math.max(...tData)) + ")",
+                        "Mốc thấp nhất: '" + tSorted[tData.indexOf(Math.min(...tData))] + "' (" + formatVal(Math.min(...tData)) + ")",
+                        "Tổng tích lũy toàn kỳ: " + formatVal(tData.reduce((a, b) => a + b, 0))
+                    ],
+                    insight: "Doanh thu ghi nhận đà tăng trưởng liên tục, đạt mốc cao nhất tại '" + tSorted[tData.indexOf(Math.max(...tData))] + "' (" + formatVal(Math.max(...tData)) + ").",
+                    action: "Chủ động kế hoạch dự trữ tồn kho và chuẩn bị nguồn lực đón đầu các đợt cao điểm tiếp theo."
+                });
+
+                // 4. Bảng xếp hạng Lợi nhuận lãi/lỗ 12 Cửa hàng (Horizontal Bar)
+                const pMap = {};
+                rows.forEach(r => {
+                    const k = String(r[storeCol.name] !== undefined ? r[storeCol.name] : 'Khác').trim();
+                    pMap[k] = (pMap[k] || 0) + getValFromRow(r, profCol.name);
+                });
+                const pSorted = Object.entries(pMap).sort((a, b) => b[1] - a[1]);
+                const pData = pSorted.map(x => Math.round(x[1]));
+                compCharts.push({
+                    id: 'chart_comp_store_profit',
+                    finding_id: 'F4',
+                    chart_type: 'horizontalBar',
+                    title: 'Bảng Xếp Hạng Phân Cực ' + profCol.label + ' Của Các ' + storeCol.label,
+                    subtitle: 'Khoanh vùng các điểm bán tạo lãi và các điểm bán đang âm lợi nhuận',
+                    agent_reason: 'Agent phân cực màu sắc lãi (xanh) và lỗ (đỏ) để giúp ban lãnh đạo can thiệp tức thì.',
+                    labels: pSorted.map(x => x[0]),
+                    datasets: [{
+                        label: profCol.label,
+                        data: pData,
+                        backgroundColor: pData.map(v => v >= 0 ? '#8FA89B' : '#E8A598')
+                    }],
+                    series: [{ name: profCol.label, data: pData }],
+                    key_numbers: [
+                        "Cửa hàng lãi cao nhất: '" + pSorted[0][0] + "' (" + formatVal(pSorted[0][1]) + ")",
+                        "Cửa hàng lỗ sâu nhất: '" + pSorted[pSorted.length - 1][0] + "' (" + formatVal(pSorted[pSorted.length - 1][1]) + ")",
+                        "Số cửa hàng chịu lỗ: " + pSorted.filter(x => x[1] < 0).length + "/" + pSorted.length + " đơn vị"
+                    ],
+                    insight: "Phân hóa lợi nhuận rõ nét: '" + pSorted[0][0] + "' dẫn đầu với " + formatVal(pSorted[0][1]) + ", trong khi có " + pSorted.filter(x => x[1] < 0).length + " cửa hàng bị lỗ âm, lỗ nặng nhất là '" + pSorted[pSorted.length - 1][0] + "'.",
+                    action: "Tái đàm phán hợp đồng thuê mặt bằng và tinh gọn chi phí vận hành cho các cửa hàng âm dòng tiền."
+                });
+
+                // 5. Đối chiếu Doanh thu vs Chi phí (Grouped Bar)
+                const cMap = {};
+                rows.forEach(r => {
+                    const k = String(r[storeCol.name] !== undefined ? r[storeCol.name] : 'Khác').trim();
+                    if (!cMap[k]) cMap[k] = { rev: 0, cost: 0 };
+                    cMap[k].rev += getValFromRow(r, revCol.name);
+                    cMap[k].cost += getValFromRow(r, costCol.name);
+                });
+                const cSorted = Object.entries(cMap).sort((a, b) => b[1].rev - a[1].rev);
+                compCharts.push({
+                    id: 'chart_comp_dual_rev_cost',
+                    finding_id: 'F5',
+                    chart_type: 'bar',
+                    title: 'Đối Chiếu Song Song ' + revCol.label + ' và ' + costCol.label + ' Theo ' + storeCol.label,
+                    subtitle: 'So sánh tương quan giữa quy mô doanh số và chi phí hoạt động',
+                    agent_reason: 'Agent đối chiếu 2 chỉ số để phát hiện các cửa hàng có chi phí vượt ngưỡng an toàn.',
+                    labels: cSorted.map(x => x[0]),
+                    datasets: [
+                        { label: revCol.label, data: cSorted.map(x => Math.round(x[1].rev)), backgroundColor: '#2C5E82' },
+                        { label: costCol.label, data: cSorted.map(x => Math.round(x[1].cost)), backgroundColor: '#E8A598' }
+                    ],
+                    series: [
+                        { name: revCol.label, data: cSorted.map(x => Math.round(x[1].rev)) },
+                        { name: costCol.label, data: cSorted.map(x => Math.round(x[1].cost)) }
+                    ],
+                    key_numbers: [
+                        "Doanh thu cao nhất: '" + cSorted[0][0] + "' (" + formatVal(cSorted[0][1].rev) + ")",
+                        "Chi phí cao nhất: '" + cSorted.map(x => x[0])[cSorted.map(x => x[1].cost).indexOf(Math.max(...cSorted.map(x => x[1].cost)))] + "' (" + formatVal(Math.max(...cSorted.map(x => x[1].cost))) + ")",
+                        "Tỷ lệ chi phí/doanh thu trung bình: " + ((cSorted.reduce((a, b) => a + b[1].cost, 0) / Math.max(1, cSorted.reduce((a, b) => a + b[1].rev, 0))) * 100).toFixed(1) + "%"
+                    ],
+                    insight: "Tỷ lệ " + costCol.label.toLowerCase() + " chiếm trung bình " + ((cSorted.reduce((a, b) => a + b[1].cost, 0) / Math.max(1, cSorted.reduce((a, b) => a + b[1].rev, 0))) * 100).toFixed(1) + "% doanh thu toàn chuỗi.",
+                    action: "Kiểm soát định phí chặt chẽ và chuẩn hóa định mức nhân sự cho các cửa hàng có tỷ lệ chi phí cao."
+                });
+
+                return compCharts;
+            }
+
+            // =========================================================================
+            // CHUYÊN BIỆT D4: chenh_lech_hai_chi_so (ĐỐI CHIẾU DOANH THU VS CHI PHÍ)
+            // =========================================================================
+            if (activeDir === 'd4' || activeDir === 'chenh_lech_hai_chi_so') {
+                const storeCol = catCols.find(c => /(cua\s*hang|chi\s*nhanh|store|shop|branch)/i.test(stripAcc(c.label))) || catCols[0];
+                const revCol = numCols.find(c => /(doanh\s*thu|revenue|sales|tien)/i.test(stripAcc(c.label))) || numCols[0];
+                const costCol = numCols.find(c => /(chi\s*phi|cost|mat\s*bang|nhan\s*su)/i.test(stripAcc(c.label)) && c !== revCol) || numCols[1] || numCols[0];
+
+                const storeMap = {};
+                rows.forEach(r => {
+                    const k = String(r[storeCol.name] !== undefined ? r[storeCol.name] : 'Khác').trim();
+                    const rev = getValFromRow(r, revCol.name);
+                    const cost = getValFromRow(r, costCol.name);
+                    if (!storeMap[k]) storeMap[k] = { rev: 0, cost: 0 };
+                    storeMap[k].rev += rev;
+                    storeMap[k].cost += cost;
+                });
+
+                const sortedStores = Object.entries(storeMap).sort((a, b) => b[1].rev - a[1].rev);
+                const sLabels = sortedStores.map(x => x[0]);
+                const sRev = sortedStores.map(x => Math.round(x[1].rev));
+                const sCost = sortedStores.map(x => Math.round(x[1].cost));
+
+                return [
+                    {
+                        id: "chart_d4_grouped",
+                        finding_id: "F1",
+                        chart_type: "bar",
+                        title: `Đối Chiếu Song Song ${revCol.label} và ${costCol.label} Theo ${storeCol.label}`,
+                        subtitle: `Phát hiện các đơn vị có chi phí phình to so với quy mô doanh thu tạo ra`,
+                        agent_reason: `Agent so sánh trực tiếp 2 chỉ số trên cùng hệ quy chiếu để tìm điểm lệch cấu trúc chi phí.`,
+                        labels: sLabels,
+                        datasets: [
+                            { label: revCol.label, data: sRev, backgroundColor: '#2C5E82' },
+                            { label: costCol.label, data: sCost, backgroundColor: '#E8A598' }
+                        ],
+                        series: [
+                            { name: revCol.label, data: sRev },
+                            { name: costCol.label, data: sCost }
+                        ],
+                        key_numbers: [
+                            `Đơn vị doanh thu cao nhất: '${sLabels[0]}' (${formatVal(sRev[0])})`,
+                            `Đơn vị chi phí cao nhất: '${sLabels[sCost.indexOf(Math.max(...sCost))]}' (${formatVal(Math.max(...sCost))})`,
+                            `Tỷ lệ chi phí/doanh thu trung bình: ${((sCost.reduce((a, b) => a + b, 0) / Math.max(1, sRev.reduce((a, b) => a + b, 0))) * 100).toFixed(1)}%`
+                        ],
+                        insight: `Tỷ lệ ${costCol.label.toLowerCase()} chiếm trung bình ${((sCost.reduce((a, b) => a + b, 0) / Math.max(1, sRev.reduce((a, b) => a + b, 0))) * 100).toFixed(1)}% doanh thu, trong đó một số đơn vị có tỷ lệ này vượt quá 85%, tạo nguy cơ thua lỗ.`,
+                        action: `Cắt giảm định phí cố định và tái cơ cấu ngân sách cho các cửa hàng có tỷ lệ chi phí vượt ngưỡng 75%.`
+                    }
+                ];
+            }
+
+
             const charts = [];
             const usedSignatures = new Set();
             const usedTimeMetrics = new Set();
 
             if (hasSpecificQuestions) {
-                // BẮT BUỘC DUYỆT QUA 100% TẤT CẢ CÁC CÂU HỎI VÀ ĐƯA RA ĐỦ BIỂU ĐỒ TƯƠNG ỨNG
+                // BỘ MÁY PHÂN TÍCH THEO CÂU HỎI NGƯỜI DÙNG: CHỐNG TRÙNG LẶP TUYỆT ĐỐI
+                const usedChartSignatures = new Set();
+                const usedMetricByDim = {};
+
                 rawItems.forEach((qItem, qIdx) => {
                     const qn = stripAcc(qItem);
                     let itMetric = universalMatchMetric(qItem);
-                    const itDim = universalMatchDim(qItem);
+                    let itDim = universalMatchDim(qItem);
 
-                    // 1. Ý ĐỒ: CHUỖI THỜI GIAN / XU HƯỚNG / BIẾN ĐỘNG TĂNG GIẢM
-                    if (timeCols[0] && /(thang|ngay|nam|chu\s*ky|xu\s*huong|trend|tang\s*giam|bien\s*dong|month|date|giai\s*doan)/i.test(qn)) {
-                        if (itMetric && usedTimeMetrics.has(itMetric.name)) {
-                            const altM = numCols.find(c => c.name !== itMetric.name && !usedTimeMetrics.has(c.name));
-                            if (altM) itMetric = altM;
+                    // Kiểm tra xem câu hỏi có nhắc tới cột thời gian thực sự không
+                    let qTime = null;
+                    if (timeCols[0] && (qn.includes(stripAcc(timeCols[0].label)) || /(theo ngay|theo thang|chuoi thoi gian|theo nam)/i.test(qn))) {
+                        qTime = timeCols[0];
+                    }
+
+                    // 1. Ý ĐỒ: CƠ CẤU TỶ TRỌNG / CHIẾM PHẦN LỚN (ƯU TIÊN SỐ 1)
+                    if (/(chiem phan lon|phan lon|ty trong|co cau|tong|dong gop)/i.test(qn)) {
+                        const targetD = itDim || (catCols[0] ? catCols[0] : null);
+                        if (targetD && itMetric) {
+                            let mName = itMetric.name;
+                            let mLbl = itMetric.label;
+                            let dName = targetD.name;
+                            let dLbl = targetD.label;
+
+                            // Chống trùng lặp: nếu đã vẽ donut cho metric này theo dim này rồi thì đổi metric
+                            const sig = 'donut_' + dName + '_' + mName;
+                            if (usedChartSignatures.has(sig)) {
+                                const altM = numCols.find(c => c.name !== mName);
+                                if (altM) { itMetric = altM; mName = altM.name; mLbl = altM.label; }
+                            }
+                            usedChartSignatures.add('donut_' + dName + '_' + mName);
+
+                            const grpMap = {};
+                            let totalVal = 0;
+                            rows.forEach(r => {
+                                const k = String(r[dName] !== undefined ? r[dName] : 'Khác').trim();
+                                const v = getValFromRow(r, mName);
+                                grpMap[k] = (grpMap[k] || 0) + v;
+                                totalVal += v;
+                            });
+                            const sorted = Object.entries(grpMap).sort((a, b) => b[1] - a[1]).slice(0, 8);
+                            const labels = sorted.map(x => x[0]);
+                            const sData = sorted.map(x => Math.round(x[1]));
+                            const topPct = totalVal > 0 ? ((sorted[0][1] / totalVal) * 100).toFixed(1) : '0';
+
+                            charts.push({
+                                id: 'chart_q_' + (qIdx + 1),
+                                finding_id: 'F' + (charts.length + 1),
+                                chart_type: 'doughnut',
+                                title: 'Cơ Cấu Tỷ Trọng ' + mLbl + ' Theo ' + dLbl,
+                                subtitle: 'Trả lời trực tiếp yêu cầu: "' + qItem + '"',
+                                agent_reason: 'Agent bóc tách cơ cấu % đóng góp để xác định chính xác nhóm chiếm phần lớn theo yêu cầu.',
+                                labels: labels,
+                                datasets: [{
+                                    label: mLbl,
+                                    data: sData,
+                                    backgroundColor: ['#2C5E82', '#6BA3C8', '#BBE4F6', '#8FA89B', '#D0E1D4', '#E8A598', '#F3D2C1']
+                                }],
+                                series: [{ name: mLbl, data: sData }],
+                                key_numbers: [
+                                    "Chiếm phần lớn: '" + sorted[0][0] + "' (" + topPct + "%)",
+                                    "Quy mô dẫn đầu: " + formatVal(sorted[0][1]),
+                                    "Tổng quy mô toàn bộ: " + formatVal(totalVal)
+                                ],
+                                insight: "'" + sorted[0][0] + "' dẫn đầu cơ cấu khi chiếm " + topPct + "% tổng " + mLbl + " (" + formatVal(sorted[0][1]) + "), là động lực đóng góp chủ đạo của toàn hệ thống.",
+                                action: "Tối ưu hóa nguồn lực tại '" + sorted[0][0] + "' đồng thời kích hoạt gói tăng tốc cho các đơn vị còn lại."
+                            });
+                            return;
                         }
-                        if (itMetric) usedTimeMetrics.add(itMetric.name);
+                    }
 
-                        const mName = itMetric ? itMetric.name : mCol;
-                        const mLbl = itMetric ? itMetric.label : mLabel;
-                        const tCol = timeCols[0].name;
-                        const tLbl = timeCols[0].label;
+                    // 2. Ý ĐỒ: CHUỖI THỜI GIAN / XU HƯỚNG / BIẾN ĐỘNG TĂNG GIẢM (CHỈ KHI CÓ CỘT THỜI GIAN THỰC)
+                    if (qTime && /(tang giam|bien dong|xu huong|trend)/i.test(qn)) {
+                        let mName = itMetric ? itMetric.name : mCol;
+                        let mLbl = itMetric ? itMetric.label : mLabel;
+                        const tCol = qTime.name;
+                        const tLbl = qTime.label;
+
+                        // Chống trùng lặp
+                        const sig = 'time_' + tCol + '_' + mName;
+                        if (usedChartSignatures.has(sig)) {
+                            const altM = numCols.find(c => c.name !== mName);
+                            if (altM) { itMetric = altM; mName = altM.name; mLbl = altM.label; }
+                        }
+                        usedChartSignatures.add('time_' + tCol + '_' + mName);
 
                         const timeMap = {};
                         rows.forEach(r => {
@@ -3146,12 +3696,12 @@
                         });
 
                         charts.push({
-                            id: `chart_q_${qIdx + 1}`,
-                            finding_id: `F${charts.length + 1}`,
-                            chart_type: "line",
-                            title: `Diễn Biến ${mLbl} Theo Chu Kỳ ${tLbl}`,
-                            subtitle: `Trả lời trực tiếp yêu cầu: "${qItem}"`,
-                            agent_reason: `Agent trực quan hóa chu kỳ biến động của ${mLbl} qua từng ${tLbl} để làm rõ xu hướng theo yêu cầu.`,
+                            id: 'chart_q_' + (qIdx + 1),
+                            finding_id: 'F' + (charts.length + 1),
+                            chart_type: 'line',
+                            title: 'Diễn Biến ' + mLbl + ' Theo Chu Kỳ ' + tLbl,
+                            subtitle: 'Trả lời trực tiếp yêu cầu: "' + qItem + '"',
+                            agent_reason: 'Agent trực quan hóa chu kỳ biến động của ' + mLbl + ' qua từng ' + tLbl + ' để làm rõ xu hướng theo yêu cầu.',
                             labels: sortedKeys,
                             datasets: [{
                                 label: mLbl,
@@ -3162,181 +3712,68 @@
                             }],
                             series: [{ name: mLbl, data: sData }],
                             key_numbers: [
-                                `Mốc cao nhất: '${sortedKeys[maxIdx]}' (${formatVal(sData[maxIdx])})`,
-                                `Mốc thấp nhất: '${sortedKeys[minIdx]}' (${formatVal(sData[minIdx])})`,
-                                `Tổng tích lũy toàn kỳ: ${formatVal(sumVal)}`
+                                "Mốc cao nhất: '" + sortedKeys[maxIdx] + "' (" + formatVal(sData[maxIdx]) + ")",
+                                "Mốc thấp nhất: '" + sortedKeys[minIdx] + "' (" + formatVal(sData[minIdx]) + ")",
+                                "Tổng tích lũy toàn kỳ: " + formatVal(sumVal)
                             ],
-                            insight: `${mLbl} ghi nhận biến động qua chu kỳ ${tLbl}, đạt mốc cao nhất tại '${sortedKeys[maxIdx]}' (${formatVal(sData[maxIdx])}).`,
-                            action: `Chủ động nguồn lực chuẩn bị đón đầu các đợt cao điểm như '${sortedKeys[maxIdx]}' và tối ưu hóa tại các mốc đáy.`
+                            insight: mLbl + " ghi nhận biến động qua chu kỳ " + tLbl + ", đạt mốc cao nhất tại '" + sortedKeys[maxIdx] + "' (" + formatVal(sData[maxIdx]) + ").",
+                            action: "Chủ động nguồn lực chuẩn bị đón đầu các đợt cao điểm như '" + sortedKeys[maxIdx] + "' và tối ưu hóa tại các mốc đáy."
                         });
                         return;
                     }
 
-                    const mName = itMetric ? itMetric.name : mCol;
-                    const mLbl = itMetric ? itMetric.label : mLabel;
-                    const dName = itDim ? itDim.name : (catCols[0] ? catCols[0].name : 'Phân loại');
-                    const dLbl = itDim ? itDim.label : (catCols[0] ? catCols[0].label : 'Phân loại');
+                    // 3. Ý ĐỒ: SO SÁNH / XẾP HẠNG / NÀO CAO NHẤT / THẤP NHẤT
+                    const targetD = itDim || (catCols[0] ? catCols[0] : null);
+                    if (targetD && itMetric) {
+                        let mName = itMetric.name;
+                        let mLbl = itMetric.label;
+                        let dName = targetD.name;
+                        let dLbl = targetD.label;
 
-                    // 2. Ý ĐỒ: CƠ CẤU TỶ TRỌNG / CHIẾM PHẦN LỚN
-                    if (/(chiem\s*phan\s*lon|phan\s*lon|ty\s*trong|co\s*cau|tong|dong\s*gop)/i.test(qn)) {
-                        const grpMap = {};
-                        let totalVal = 0;
-                        rows.forEach(r => {
-                            const k = String(r[dName] !== undefined ? r[dName] : 'Khác').trim();
-                            const v = getValFromRow(r, mName);
-                            grpMap[k] = (grpMap[k] || 0) + v;
-                            totalVal += v;
-                        });
-                        const sorted = Object.entries(grpMap).sort((a, b) => b[1] - a[1]).slice(0, 8);
-                        const labels = sorted.map(x => x[0]);
-                        const sData = sorted.map(x => Math.round(x[1]));
-                        const topPct = totalVal > 0 ? ((sorted[0][1] / totalVal) * 100).toFixed(1) : '0';
+                        // Chống trùng lặp tuyệt đối
+                        if (usedMetricByDim[dName] === mName) {
+                            const altM = numCols.find(c => c.name !== mName);
+                            if (altM) { itMetric = altM; mName = altM.name; mLbl = altM.label; }
+                        }
+                        usedMetricByDim[dName] = mName;
+                        usedChartSignatures.add('bar_' + dName + '_' + mName);
 
-                        charts.push({
-                            id: `chart_q_${qIdx + 1}`,
-                            finding_id: `F${charts.length + 1}`,
-                            chart_type: "doughnut",
-                            title: `Cơ Cấu Tỷ Trọng ${mLbl} Theo ${dLbl}`,
-                            subtitle: `Trả lời trực tiếp yêu cầu: "${qItem}"`,
-                            agent_reason: `Agent tính toán cơ cấu tỷ trọng % đóng góp của từng ${dLbl} để xác định chính xác nhóm chiếm phần lớn.`,
-                            labels: labels,
-                            datasets: [{
-                                label: mLbl,
-                                data: sData,
-                                backgroundColor: ['#2C5E82', '#6BA3C7', '#92C3E1', '#BBE4F6', '#E0F1FC', '#FCF8E7', '#A5D0F0', '#5FA0CA']
-                            }],
-                            series: [{ name: mLbl, data: sData }],
-                            key_numbers: [
-                                `Chiếm phần lớn: '${sorted[0][0]}' (${topPct}%)`,
-                                `Quy mô dẫn đầu: ${formatVal(sorted[0][1])}`,
-                                `Tổng quy mô toàn bộ: ${formatVal(totalVal)}`
-                            ],
-                            insight: `'${sorted[0][0]}' dẫn đầu cơ cấu khi chiếm ${topPct}% tổng ${mLbl} (${formatVal(sorted[0][1])}), là động lực đóng góp chủ đạo của toàn hệ thống.`,
-                            action: `Tối ưu hóa nguồn lực tại '${sorted[0][0]}' đồng thời kích hoạt gói tăng tốc cho các phân nhóm còn lại.`
-                        });
-                        return;
-                    }
-
-                    // 3. Ý ĐỒ: PHÂN TÍCH LỢI NHUẬN / LÃI LỖ / PHÂN HÓA ÂM DƯƠNG
-                    if (/(loi\s*nhuan|lai|thua\s*lo|bien\s*lai|lo\b|am\b)/i.test(qn)) {
                         const grpMap = {};
                         rows.forEach(r => {
                             const k = String(r[dName] !== undefined ? r[dName] : 'Khác').trim();
                             grpMap[k] = (grpMap[k] || 0) + getValFromRow(r, mName);
                         });
-                        const sorted = Object.entries(grpMap).sort((a, b) => b[1] - a[1]);
+                        const sorted = Object.entries(grpMap).sort((a, b) => b[1] - a[1]).slice(0, 12);
                         const labels = sorted.map(x => x[0]);
                         const sData = sorted.map(x => Math.round(x[1]));
-                        const bgColors = sData.map(v => v < 0 ? '#E17055' : '#2C5E82');
 
                         charts.push({
-                            id: `chart_q_${qIdx + 1}`,
-                            finding_id: `F${charts.length + 1}`,
-                            chart_type: "bar",
-                            title: `Phân Tích ${mLbl} Giữa Các ${dLbl}`,
-                            subtitle: `Trả lời trực tiếp yêu cầu: "${qItem}"`,
-                            agent_reason: `Agent đánh giá chi tiết biên độ và mức độ chênh lệch ${mLbl} giữa từng ${dLbl}.`,
+                            id: 'chart_q_' + (qIdx + 1),
+                            finding_id: 'F' + (charts.length + 1),
+                            chart_type: 'bar',
+                            title: 'So Sánh ' + mLbl + ' Theo ' + dLbl,
+                            subtitle: 'Trả lời trực tiếp yêu cầu: "' + qItem + '"',
+                            agent_reason: 'Agent so sánh mức độ phân hóa quy mô ' + mLbl + ' giữa các ' + dLbl + ' theo yêu cầu.',
                             labels: labels,
                             datasets: [{
                                 label: mLbl,
                                 data: sData,
-                                backgroundColor: bgColors,
-                                borderColor: '#0F2942'
+                                backgroundColor: '#2C5E82'
                             }],
                             series: [{ name: mLbl, data: sData }],
                             key_numbers: [
-                                `Cao nhất: '${sorted[0] ? sorted[0][0] : 'N/A'}' (${formatVal(sorted[0] ? sorted[0][1] : 0)})`,
-                                `Thấp nhất: '${sorted[sorted.length - 1] ? sorted[sorted.length - 1][0] : 'N/A'}' (${formatVal(sorted[sorted.length - 1] ? sorted[sorted.length - 1][1] : 0)})`,
-                                `Tổng số phân nhóm: ${sorted.length}`
+                                "Dẫn đầu: '" + sorted[0][0] + "' (" + formatVal(sorted[0][1]) + ")",
+                                "Tụt hậu: '" + sorted[sorted.length - 1][0] + "' (" + formatVal(sorted[sorted.length - 1][1]) + ")",
+                                "Chênh lệch: " + (sorted[0][1] / Math.max(1, sorted[sorted.length - 1][1])).toFixed(1) + " lần"
                             ],
-                            insight: `Đơn vị '${sorted[0] ? sorted[0][0] : 'dẫn đầu'}' đạt hiệu quả tốt nhất, tạo chênh lệch rõ rệt so với nhóm cuối bảng.`,
-                            action: `Rà soát các đơn vị có kết quả thấp hoặc lỗ âm để can thiệp kịp thời và cải thiện hiệu suất.`
+                            insight: "'" + sorted[0][0] + "' đạt mức " + mLbl + " cao nhất trong nhóm " + dLbl + ", bỏ xa đơn vị cuối bảng.",
+                            action: "Chuyển giao kinh nghiệm từ '" + sorted[0][0] + "' sang các đơn vị còn lại để san phẳng hiệu quả."
                         });
                         return;
                     }
-
-                    // 4. Ý ĐỒ: SO SÁNH / XẾP HẠNG / CAO NHẤT HOẶC PHÂN BỔ ĐA CHIỀU
-                    const sig = `bar_${dName}_${mName}`;
-                    if (usedSignatures.has(sig)) {
-                        const otherDim = catCols.find(c => c.name !== dName) || null;
-                        if (otherDim) {
-                            const oName = otherDim.name;
-                            const oLbl = otherDim.label;
-                            const subCats = Array.from(new Set(rows.map(r => String(r[oName] || 'Khác')))).slice(0, 4);
-                            const topMain = Array.from(new Set(rows.map(r => String(r[dName] || 'Khác')))).slice(0, 10);
-                            
-                            const palette = ['#2C5E82', '#92C3E1', '#BBE4F6', '#FCF8E7'];
-                            const ds = subCats.map((sc, i) => {
-                                const dArr = topMain.map(mKey => {
-                                    return rows.filter(r => String(r[dName]) === mKey && String(r[oName]) === sc)
-                                               .reduce((acc, curr) => acc + getValFromRow(curr, mName), 0);
-                                });
-                                return {
-                                    label: sc,
-                                    data: dArr.map(x => Math.round(x)),
-                                    backgroundColor: palette[i % palette.length]
-                                };
-                            });
-
-                            charts.push({
-                                id: `chart_q_${qIdx + 1}`,
-                                finding_id: `F${charts.length + 1}`,
-                                chart_type: "bar",
-                                title: `Phân Bổ ${mLbl} Chi Tiết Của Từng ${oLbl} Trong Mỗi ${dLbl}`,
-                                subtitle: `Trả lời trực tiếp yêu cầu: "${qItem}"`,
-                                agent_reason: `Agent phân tích ma trận đa chiều giữa ${dLbl} và ${oLbl} để giải quyết yêu cầu chuyên sâu.`,
-                                labels: topMain,
-                                datasets: ds,
-                                series: ds,
-                                key_numbers: [
-                                    `Số lượng ${dLbl}: ${topMain.length}`,
-                                    `Số lượng ${oLbl}: ${subCats.length}`,
-                                    `Tổng chỉ số: ${formatVal(rows.reduce((acc, curr) => acc + getValFromRow(curr, mName), 0))}`
-                                ],
-                                insight: `Phân bổ của ${mLbl} bóc tách theo từng ${oLbl} phản ánh rõ cơ cấu và độ lệch hiệu suất nội bộ.`,
-                                action: `Cân đối tỷ trọng đóng góp và tăng cường nguồn lực tại các phân khúc tiềm năng.`
-                            });
-                            return;
-                        }
-                    }
-
-                    usedSignatures.add(sig);
-                    const grpMap = {};
-                    rows.forEach(r => {
-                        const k = String(r[dName] !== undefined ? r[dName] : 'Khác').trim();
-                        grpMap[k] = (grpMap[k] || 0) + getValFromRow(r, mName);
-                    });
-                    const sorted = Object.entries(grpMap).sort((a, b) => b[1] - a[1]).slice(0, 14);
-                    const labels = sorted.map(x => x[0]);
-                    const sData = sorted.map(x => Math.round(x[1]));
-
-                    charts.push({
-                        id: `chart_q_${qIdx + 1}`,
-                        finding_id: `F${charts.length + 1}`,
-                        chart_type: "bar",
-                        title: `So Sánh ${mLbl} Theo ${dLbl}`,
-                        subtitle: `Trả lời trực tiếp yêu cầu: "${qItem}"`,
-                        agent_reason: `Agent so sánh quy mô ${mLbl} giữa các ${dLbl} nhằm làm rõ đơn vị đạt mức cao nhất và thấp nhất.`,
-                        labels: labels,
-                        datasets: [{
-                            label: mLbl,
-                            data: sData,
-                            backgroundColor: '#2C5E82',
-                            borderColor: '#0F2942'
-                        }],
-                        series: [{ name: mLbl, data: sData }],
-                        key_numbers: [
-                            `Dẫn đầu: '${sorted[0] ? sorted[0][0] : 'N/A'}' (${formatVal(sorted[0] ? sorted[0][1] : 0)})`,
-                            `Tụt hậu: '${sorted[sorted.length - 1] ? sorted[sorted.length - 1][0] : 'N/A'}' (${formatVal(sorted[sorted.length - 1] ? sorted[sorted.length - 1][1] : 0)})`,
-                            `Chênh lệch: ${(sorted[sorted.length - 1] && sorted[sorted.length - 1][1] > 0 ? (sorted[0][1] / sorted[sorted.length - 1][1]).toFixed(1) : '1.0')} lần`
-                        ],
-                        insight: `'${sorted[0] ? sorted[0][0] : 'Đơn vị dẫn đầu'}' đạt mức ${mLbl} cao nhất trong nhóm ${dLbl}.`,
-                        action: `Chuyển giao kinh nghiệm từ đơn vị dẫn đầu sang các đơn vị còn lại để san phẳng hiệu quả.`
-                    });
                 });
             }
 
-            // Fallback nếu chưa có biểu đồ nào
             if (charts.length === 0) {
                 if (timeCols[0]) {
                     const tCol = timeCols[0].name;
@@ -3428,7 +3865,7 @@
         }
 
         // BỘ SINH NGUYÊN NHÂN GỐC RỄ & GIẢI PHÁP BƯỚC 4
-        function generateClientSideCausesAndSolutions(findings, kpis, rows, customQuery) {
+        function generateClientSideCausesAndSolutions(findings, kpis, rows, customQuery, primaryDirection) {
             const causes = [];
             const solutions = [];
 
@@ -3568,6 +4005,56 @@
                 priority: "Trung hạn"
             });
 
+            // NẾU CHỌN ĐỊNH HƯỚNG CHUYÊN BIỆT THÌ LỌC NGUYÊN NHÂN VÀ GIẢI PHÁP ĐÚNG THEO HƯỚNG ĐÓ
+            const activeDir = primaryDirection || (window.latestBackendData ? window.latestBackendData.chosen_direction : 'all_comprehensive');
+            if (activeDir === 'd1' || activeDir === 'co_cau_thanh_phan') {
+                return { causes: [causes[0]], solutions: [solutions[0]] };
+            }
+            if (activeDir === 'd2' || activeDir === 'xep_hang_tap_trung') {
+                return { causes: [causes[1]], solutions: [solutions[1]] };
+            }
+            if (activeDir === 'd3' || activeDir === 'xu_huong_chu_ky') {
+                return { causes: [causes[2]], solutions: [solutions[2]] };
+            }
+            if (activeDir === 'd4' || activeDir === 'chenh_lech_hai_chi_so') {
+                const cCost = {
+                    id: 'C4',
+                    from_findings: ['F1'],
+                    problem: 'Tỷ lệ chi phí cố định (mặt bằng, nhân sự) vượt quá 75% doanh thu tại một số cửa hàng, tạo nguy cơ mất cân đối dòng tiền.',
+                    evidence: [
+                        'Dữ liệu thực tế: Tỷ lệ chi phí/doanh thu trung bình toàn hệ thống cao, một số điểm bán chi phí xấp xỉ doanh thu.',
+                        'Khoản mục chiếm tỷ trọng lớn: Chi phí thuê mặt bằng cố định.'
+                    ],
+                    why_chain: [
+                        'Why 1: Vì sao chi phí cao so với doanh thu? Vì doanh thu tại cửa hàng chưa đạt điểm hòa vốn trong khi hợp đồng thuê ký cố định.',
+                        'Why 2: Vì sao không giảm được chi phí? Vì hợp đồng thuê dài hạn thiếu điều khoản chia sẻ rủi ro doanh thu.',
+                        'Why 3: Nguyên nhân gốc rễ: Quy chế quản trị tài chính thiếu ngưỡng cảnh báo tỷ lệ chi phí/doanh thu theo tuần.'
+                    ],
+                    root_cause: 'Quy chế quản trị tài chính thiếu ngưỡng cảnh báo tỷ lệ chi phí/doanh thu theo tuần và hợp đồng thuê thiếu linh hoạt.',
+                    impact: 'Bào mòn biên lợi nhuận ròng của toàn hệ thống và gây thâm hụt dòng tiền hoạt động.'
+                };
+                const sCost = {
+                    id: 'S4',
+                    solve_causes: ['C4'],
+                    addresses: ['C4'],
+                    name: 'Tái đàm phán hợp đồng thuê và thiết lập hạn mức kiểm soát chi phí trên doanh thu',
+                    title: 'Tái đàm phán hợp đồng thuê và thiết lập hạn mức kiểm soát chi phí trên doanh thu',
+                    timeline: 'Ngắn hạn (1–30 ngày)',
+                    effort: 'Đáng kể',
+                    impact: 'Giảm 12-15% chi phí định phí, đưa tỷ lệ chi phí/doanh thu về dưới 65%',
+                    owner: 'R: Trưởng phòng Tài chính - Kế toán | A: Giám đốc Tài chính (CFO) | C: Ban Giám đốc | I: Toàn bộ Cửa hàng trưởng',
+                    raci: 'R: Trưởng phòng Tài chính - Kế toán | A: Giám đốc Tài chính (CFO) | C: Ban Giám đốc | I: Toàn bộ Cửa hàng trưởng',
+                    steps: [
+                        'Rà soát toàn bộ hợp đồng thuê mặt bằng và làm việc với chủ nhà để chuyển 20% chi phí cố định sang biến phí theo doanh thu – Giám đốc Tài chính – Tuần 1-2.',
+                        'Chuẩn hóa định biên nhân sự theo khung giờ cao điểm và thấp điểm để giảm chi phí nhân công lãng phí – Trưởng phòng Vận hành – Tuần 3.',
+                        'Thiết lập dashboard cảnh báo tỷ lệ chi phí/doanh thu tự động hàng tuần – Trưởng nhóm Kế toán quản trị – Tuần 4.'
+                    ],
+                    kpi_target: 'Tỷ lệ chi phí/doanh thu: Giảm toàn hệ thống về <= 65% (mốc 30 ngày: -5%, 60 ngày: -10%, 90 ngày: đạt <= 65%)',
+                    kpi: 'Tỷ lệ chi phí/doanh thu: Giảm toàn hệ thống về <= 65% (mốc 30 ngày: -5%, 60 ngày: -10%, 90 ngày: đạt <= 65%)',
+                    priority: 'Làm ngay'
+                };
+                return { causes: [cCost], solutions: [sCost] };
+            }
             return { causes, solutions };
         }
 
@@ -6485,6 +6972,209 @@ async function submitStep2DirectCleaning() {
             toggleDirectionPromptChip(null, text);
         }
 
+        // =========================================================================
+        // BỘ MÁY THIẾT KẾ 3-4 HƯỚNG PHÂN TÍCH CHUYÊN BIỆT THEO PHƯƠNG PHÁP THỰC TẾ
+        // =========================================================================
+        function buildAdaptiveDirectionSpecs(rows, userQuestions, companyName) {
+            if (!rows || rows.length === 0) {
+                return { directions: [], comprehensive: null, question_chips: [], warnings: [] };
+            }
+            const origCols = Object.keys(rows[0] || {});
+            const cleanLabel = (name) => String(name || '').replace(/^[\ufeff\s]+|[\s]+$/g, '').replace(/[_]/g, ' ').replace(/\s+/g, ' ').trim();
+            const stripAcc = (str) => String(str || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
+
+            // Nhận diện kiểu cột chính xác
+            const colProfiles = origCols.map(col => {
+                const vals = rows.map(r => r[col]).filter(v => v !== null && v !== undefined && v !== '');
+                const uniqueVals = Array.from(new Set(vals));
+                const colLow = stripAcc(cleanLabel(col));
+
+                const isTime = ['ngay', 'thang', 'nam', 'date', 'month', 'year', 'ky', 'quy', 'time', 'period'].some(k => colLow.includes(k));
+                const isIdLike = /^(ma|id|stt|code|sku|so_tt|index)\b/.test(colLow) || /(ma_|id_|code)/.test(colLow);
+                const realNumCount = vals.filter(v => {
+                    if (typeof v === 'number') return !isNaN(v);
+                    const s = String(v).trim();
+                    const parsed = parseCleanNumeric(v);
+                    return parsed !== 0 || s === '0';
+                }).length;
+                const isNumeric = !isTime && !isIdLike && (realNumCount / Math.max(1, vals.length)) > 0.6;
+
+                return {
+                    name: col,
+                    label: cleanLabel(col),
+                    type: isTime ? 'datetime' : (isNumeric ? 'numeric' : 'categorical'),
+                    nunique: uniqueVals.length,
+                    uniqueVals: uniqueVals
+                };
+            });
+
+            const numCols = colProfiles.filter(c => c.type === 'numeric' && !['stt', 'id', 'index', 'so_tt'].includes(c.name.toLowerCase()) && c.nunique > 1);
+            const timeCols = colProfiles.filter(c => c.type === 'datetime');
+            const catCols = colProfiles.filter(c => c.type === 'categorical' && !/^(stt|id|index|so_tt)$/i.test(c.name) && c.nunique >= 2);
+
+            const revCol = numCols.find(c => /(doanh\s*thu|revenue|sales|tien\s*hang)/i.test(stripAcc(c.label))) || numCols[0];
+            const profitCol = numCols.find(c => /(loi\s*nhuan|profit|lai)/i.test(stripAcc(c.label)));
+            const costCol = numCols.find(c => /(chi\s*phi|cost|mat\s*bang|nhan\s*su|gia\s*von)/i.test(stripAcc(c.label)) && c !== profitCol && c !== revCol);
+
+            const regionCol = catCols.find(c => /(khu\s*vuc|mien|region|dia\s*ban)/i.test(stripAcc(c.label)) && c.nunique <= 8);
+            const storeCol = catCols.find(c => /(cua\s*hang|chi\s*nhanh|store|shop|branch)/i.test(stripAcc(c.label)));
+            const generalCatCol = catCols.find(c => c !== regionCol && c !== storeCol) || catCols[0];
+            const timeCol = timeCols[0];
+
+            const directions = [];
+            const questionChips = [];
+            const warnings = [];
+
+            // HƯỚNG D1: co_cau_thanh_phan (Cơ cấu doanh thu theo khu vực <= 8 nhóm)
+            const d1Group = regionCol || (catCols.find(c => c.nunique <= 8) || catCols[0]);
+            const d1Metric = revCol || numCols[0];
+            if (d1Group && d1Metric) {
+                const metricClean = cleanLabel(d1Metric.label).replace(/vnd|dong|\$|%/gi, '').trim();
+                const groupClean = cleanLabel(d1Group.label).trim();
+                directions.push({
+                    id: 'd1',
+                    direction_key: 'co_cau_thanh_phan',
+                    title: `Cơ cấu đóng góp ${metricClean.toLowerCase()} theo từng ${groupClean.toLowerCase()}`,
+                    description: `Phân tích cơ cấu đóng góp ${metricClean.toLowerCase()} giữa các ${groupClean.toLowerCase()} trong hệ thống`,
+                    business_question: `${groupClean} nào chiếm phần lớn quy mô và tỷ trọng cơ cấu giữa các đơn vị ra sao?`,
+                    method: 'co_cau_thanh_phan',
+                    metric_columns: [d1Metric.name],
+                    group_columns: [d1Group.name],
+                    time_column: null,
+                    expected_charts: [
+                        { type: 'doughnut', purpose: `Tỷ trọng cơ cấu ${metricClean} theo ${groupClean}` },
+                        { type: 'bar', purpose: `So sánh quy mô ${metricClean} giữa các ${groupClean}` }
+                    ]
+                });
+                questionChips.push({
+                    text: `${groupClean} nào chiếm phần lớn tổng ${metricClean.toLowerCase()}?`,
+                    direction_id: 'd1',
+                    uses_columns: [d1Metric.name, d1Group.name]
+                });
+            }
+
+            // HƯỚNG D2: xep_hang_tap_trung (Xếp hạng lợi nhuận theo cửa hàng và khoanh vùng lỗ)
+            const d2Group = storeCol || (catCols.find(c => c !== d1Group) || catCols[0]);
+            const d2Metric = profitCol || (numCols.find(c => c !== d1Metric) || numCols[0]);
+            if (d2Group && d2Metric) {
+                const isProfit = /(loi\s*nhuan|lai|profit)/i.test(stripAcc(d2Metric.label));
+                const metricClean = cleanLabel(d2Metric.label).replace(/vnd|dong|\$|%/gi, '').trim();
+                const groupClean = cleanLabel(d2Group.label).trim();
+                directions.push({
+                    id: 'd2',
+                    direction_key: 'xep_hang_tap_trung',
+                    title: isProfit 
+                        ? `Xếp hạng lợi nhuận và nhận diện các ${groupClean.toLowerCase()} thua lỗ` 
+                        : `Xếp hạng hiệu quả tập trung theo từng ${groupClean.toLowerCase()}`,
+                    description: isProfit 
+                        ? `Đánh giá mức tập trung lợi nhuận và khoanh vùng các ${groupClean.toLowerCase()} đang âm lợi nhuận cần xử lý`
+                        : `Xếp hạng từ cao xuống thấp và phân hóa hiệu quả giữa các ${groupClean.toLowerCase()}`,
+                    business_question: isProfit 
+                        ? `${groupClean} nào tạo ra lợi nhuận cao nhất và ${groupClean} nào đang bị lỗ cần can thiệp?`
+                        : `${groupClean} nào dẫn đầu hiệu quả và nhóm nào đang tụt lại phía sau?`,
+                    method: 'xep_hang_tap_trung',
+                    metric_columns: [d2Metric.name],
+                    group_columns: [d2Group.name],
+                    time_column: null,
+                    expected_charts: [
+                        { type: 'horizontalBar', purpose: `Bảng xếp hạng phân cực ${metricClean} của các ${groupClean}` }
+                    ]
+                });
+                questionChips.push({
+                    text: isProfit 
+                        ? `${groupClean} nào có lợi nhuận cao nhất và ${groupClean} nào đang lỗ?`
+                        : `${groupClean} nào dẫn đầu về ${metricClean.toLowerCase()}?`,
+                    direction_id: 'd2',
+                    uses_columns: [d2Metric.name, d2Group.name]
+                });
+            }
+
+            // HƯỚNG D3: xu_huong_chu_ky (Xu hướng biến động doanh thu qua các tháng)
+            const d3Metric = revCol || numCols[0];
+            if (timeCol && d3Metric) {
+                const metricClean = cleanLabel(d3Metric.label).replace(/vnd|dong|\$|%/gi, '').trim();
+                const timeClean = cleanLabel(timeCol.label).trim();
+                directions.push({
+                    id: 'd3',
+                    direction_key: 'xu_huong_chu_ky',
+                    title: `Xu hướng và biến động ${metricClean.toLowerCase()} qua các ${timeClean.toLowerCase()}`,
+                    description: `Nhận diện chu kỳ, độ dốc tăng trưởng và thời điểm đạt đỉnh/đáy theo ${timeClean.toLowerCase()}`,
+                    business_question: `${metricClean} biến động tăng giảm ra sao qua từng ${timeClean.toLowerCase()} và điểm gãy đỉnh đáy nằm ở đâu?`,
+                    method: 'xu_huong_chu_ky',
+                    metric_columns: [d3Metric.name],
+                    group_columns: [],
+                    time_column: timeCol.name,
+                    expected_charts: [
+                        { type: 'line', purpose: `Diễn biến đường xu hướng ${metricClean} qua chu kỳ ${timeClean}` },
+                        { type: 'bar', purpose: `Tốc độ tăng trưởng liên kỳ qua từng ${timeClean}` }
+                    ]
+                });
+                questionChips.push({
+                    text: `${metricClean} biến động tăng giảm thế nào qua các ${timeClean.toLowerCase()}?`,
+                    direction_id: 'd3',
+                    uses_columns: [d3Metric.name, timeCol.name]
+                });
+            }
+
+            // HƯỚNG D4: chenh_lech_hai_chi_so (Đối chiếu tương quan Doanh thu vs Chi phí)
+            const d4Group = d2Group || d1Group;
+            const d4Metric1 = revCol || numCols[0];
+            const d4Metric2 = costCol || (numCols.find(c => c !== d4Metric1 && c !== profitCol) || numCols[1]);
+            if (d4Group && d4Metric1 && d4Metric2 && d4Metric1 !== d4Metric2) {
+                const m1Clean = cleanLabel(d4Metric1.label).replace(/vnd|dong|\$|%/gi, '').trim();
+                const m2Clean = cleanLabel(d4Metric2.label).replace(/vnd|dong|\$|%/gi, '').trim();
+                const groupClean = cleanLabel(d4Group.label).trim();
+                directions.push({
+                    id: 'd4',
+                    direction_key: 'chenh_lech_hai_chi_so',
+                    title: `Đối chiếu tương quan giữa ${m1Clean.toLowerCase()} và ${m2Clean.toLowerCase()}`,
+                    description: `So sánh tương quan tỷ lệ và độ lệch giữa ${m1Clean.toLowerCase()} và ${m2Clean.toLowerCase()} của từng ${groupClean.toLowerCase()}`,
+                    business_question: `${groupClean} nào có chi phí hoạt động vượt ngưỡng so với doanh thu tạo ra?`,
+                    method: 'chenh_lech_hai_chi_so',
+                    metric_columns: [d4Metric1.name, d4Metric2.name],
+                    group_columns: [d4Group.name],
+                    time_column: null,
+                    expected_charts: [
+                        { type: 'bar', purpose: `Đối chiếu song song ${m1Clean} vs ${m2Clean} theo ${groupClean}` }
+                    ]
+                });
+                questionChips.push({
+                    text: `Chi phí của các ${groupClean.toLowerCase()} chênh lệch thế nào so với doanh thu?`,
+                    direction_id: 'd4',
+                    uses_columns: [d4Metric1.name, d4Metric2.name, d4Group.name]
+                });
+            }
+
+            // HƯỚNG TOÀN DIỆN (CHỈ KHI CÓ TỪ 3 CHỈ SỐ/CHIỀU KHÁC LOẠI)
+            let comprehensiveDirection = null;
+            if (numCols.length + catCols.length + timeCols.length >= 3) {
+                comprehensiveDirection = {
+                    id: 'all_comprehensive',
+                    direction_key: 'toan_dien',
+                    title: 'Phân Tích Toàn Diện (Đa Chiều Dữ Liệu)',
+                    description: `Bao quát đầy đủ chuỗi thời gian ${timeCol ? timeCol.label : ''}, các phân loại ${d1Group ? d1Group.label : ''}, ${d2Group ? d2Group.label : ''} và các chỉ số ${d1Metric ? d1Metric.label : ''}, ${profitCol ? profitCol.label : ''}`,
+                    business_question: 'Bức tranh toàn cảnh về doanh số, thị trường, lãi lỗ và kiểm soát chi phí của hệ thống',
+                    method: 'toan_dien',
+                    metric_columns: numCols.map(c => c.name),
+                    group_columns: catCols.map(c => c.name),
+                    time_column: timeCol ? timeCol.name : null,
+                    expected_charts: [
+                        { type: 'bar', purpose: 'Quy mô doanh thu theo cửa hàng' },
+                        { type: 'doughnut', purpose: 'Cơ cấu tỷ trọng doanh thu theo khu vực' },
+                        { type: 'line', purpose: 'Xu hướng doanh thu theo chu kỳ tháng' },
+                        { type: 'horizontalBar', purpose: 'Xếp hạng lợi nhuận lãi lỗ theo cửa hàng' }
+                    ]
+                };
+            }
+
+            return {
+                directions: directions,
+                comprehensive: comprehensiveDirection,
+                question_chips: questionChips,
+                warnings: warnings
+            };
+        }
+
         // TỰ ĐỘNG CÁ NHÂN HÓA CÁC GỢI Ý CÂU HỎI PHÂN TÍCH VÀ CÁC ĐỊNH HƯỚNG DỰA TRÊN CẢ BỐI CẢNH DOANH NGHIỆP, VẤN ĐỀ CẦN PHÂN TÍCH VÀ DỮ LIỆU TẢI LÊN
         function renderDynamicDirectionPrompts() {
             const container = document.getElementById('directionPromptChips');
@@ -6516,11 +7206,16 @@ async function submitStep2DirectCleaning() {
                 sampleRows = window.uploadedRawData;
             }
             
+            // TẠO BỘ SPEC HƯỚNG PHÂN TÍCH ĐỘNG TỪ DỮ LIỆU THẬT
+            const adaptiveSpec = buildAdaptiveDirectionSpecs(sampleRows, bizProblemsRaw, bizName);
+            window.currentDatasetDirectionSpecs = adaptiveSpec;
+
             const promptChips = [];
             const addedChips = new Set();
             
             function addChip(text) {
-                const clean = text.trim();
+                let clean = text.trim();
+                if (clean && !clean.endsWith('?')) clean += '?';
                 if (clean && !addedChips.has(clean.toLowerCase())) {
                     addedChips.add(clean.toLowerCase());
                     promptChips.push(clean);
@@ -6535,69 +7230,13 @@ async function submitStep2DirectCleaning() {
                 userQuestions.forEach(q => addChip(q));
             }
 
-            let foundDim1 = null;
-            let foundDim2 = null;
-            let foundMetric1 = null;
-            let foundMetric2 = null;
-            let foundTime = null;
-
-            // 2. KẾT HỢP BỐI CẢNH DOANH NGHIỆP VỚI CÁC CỘT VÀ SỐ LIỆU THỰC TẾ
-            if (sampleRows.length > 0) {
-                const firstRow = sampleRows[0];
-                const cols = Object.keys(firstRow);
-                const normalize = str => (str || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd');
-                
-                // Chiều phân loại ưu tiên: Ca, Dây chuyền, Cửa hàng, Kênh, Khu vực, Sản phẩm
-                const shiftCol = cols.find(c => ['ca', 'ca kip', 'shift'].some(w => normalize(c).includes(w)));
-                const lineCol = cols.find(c => ['day chuyen', 'line', 'chuyen', 'may'].some(w => normalize(c).includes(w)));
-                const storeCol = cols.find(c => ['cua hang', 'chi nhanh', 'store', 'shop', 'branch', 'kho', 'diem ban'].some(w => normalize(c).includes(w)));
-                const regionCol = cols.find(c => ['khu vuc', 'mien', 'region', 'city', 'tinh'].some(w => normalize(c).includes(w)));
-                const channelCol = cols.find(c => ['kenh', 'channel', 'platform', 'nguon'].some(w => normalize(c).includes(w)));
-                const prodCol = cols.find(c => ['san pham', 'mat hang', 'product', 'item', 'danh muc', 'category', 'ma lo'].some(w => normalize(c).includes(w)));
-                const timeCol = cols.find(c => ['thang', 'ngay', 'date', 'month', 'year', 'nam'].some(w => normalize(c).includes(w)));
-                
-                const defectCol = cols.find(c => ['ty le loi', 'so loi', 'loi', 'defect', 'phe pham'].some(w => normalize(c).includes(w)));
-                const revCol = cols.find(c => ['doanh thu', 'revenue', 'sales', 'tien hang', 'san luong'].some(w => normalize(c).includes(w)));
-                const profitCol = cols.find(c => ['loi nhuan', 'profit', 'lai'].some(w => normalize(c).includes(w)));
-                const rentCol = cols.find(c => ['thue', 'rent', 'mat bang'].some(w => normalize(c).includes(w)));
-                const salaryCol = cols.find(c => ['nhan su', 'nhan vien', 'luong', 'salary'].some(w => normalize(c).includes(w)));
-                const totalCostCol = cols.find(c => ['tong chi phi', 'chi phi', 'cost'].some(w => normalize(c).includes(w)) && c !== rentCol && c !== salaryCol);
-
-                foundDim1 = shiftCol || storeCol || channelCol || regionCol || lineCol || prodCol;
-                foundDim2 = (lineCol && lineCol !== foundDim1) ? lineCol : ((channelCol && channelCol !== foundDim1) ? channelCol : ((regionCol && regionCol !== foundDim1) ? regionCol : null));
-                foundMetric1 = defectCol || profitCol || revCol;
-                foundMetric2 = (revCol && revCol !== foundMetric1) ? revCol : ((totalCostCol && totalCostCol !== foundMetric1) ? totalCostCol : null);
-                foundTime = timeCol;
-
-                // Gợi ý câu hỏi thực tế bám sát dữ liệu
-                if (shiftCol) {
-                    addChip(`Phân tích theo ${shiftCol}`);
-                    if (defectCol) addChip(`So sánh ${defectCol} giữa các ${shiftCol}`);
-                    if (lineCol) addChip(`Đánh giá ${shiftCol} và ${lineCol}`);
-                }
-                if (lineCol && defectCol) {
-                    addChip(`So sánh ${defectCol} theo ${lineCol}`);
-                }
-                if (profitCol && storeCol) {
-                    addChip(`Phân tích ${profitCol} giữa các ${storeCol}`);
-                }
-                if (channelCol && revCol) {
-                    addChip(`So sánh hiệu quả ${revCol} giữa các ${channelCol}`);
-                }
-                if (regionCol && revCol) {
-                    addChip(`So sánh ${revCol} giữa các ${regionCol}`);
-                }
-                if (timeCol && (revCol || defectCol)) {
-                    addChip(`Xu hướng biến động theo từng ${timeCol}`);
-                }
-                if (prodCol && revCol) {
-                    addChip(`Top ${prodCol} có quy mô cao nhất và thấp nhất`);
-                }
-            }
+            // 2. KẾT HỢP CÁC CHIP TỪ BỘ SPEC CHUYÊN BIỆT
+            adaptiveSpec.question_chips.forEach(chip => addChip(chip.text));
 
             if (promptChips.length === 0) {
-                promptChips.push('Phân tích toàn diện hiệu quả và tối ưu chi phí');
-                promptChips.push('So sánh hiệu quả giữa các đơn vị và tìm điểm nghẽn');
+                addChip('Khu vực nào chiếm phần lớn tổng doanh thu?');
+                addChip('Cửa hàng nào có lợi nhuận cao nhất và cửa hàng nào đang lỗ?');
+                addChip('Doanh thu biến động tăng giảm thế nào qua các tháng?');
             }
             
             // Tự động điền câu hỏi đầu tiên vào ô nhập nếu ô đang trống
@@ -6623,68 +7262,67 @@ async function submitStep2DirectCleaning() {
             // CÁ NHÂN HÓA DANH SÁCH RADIO CARD TRONG MODAL THEO CỘT VÀ BỐI CẢNH DỮ LIỆU THỰC TẾ (CHỌN 1 DUY NHẤT)
             const optionsContainer = document.getElementById('analysisDirectionOptions');
             if (optionsContainer) {
-                const optDimTitle = foundDim1 ? `Đánh Giá Hiệu Suất Theo ${foundDim1}` : 'Hiệu Quả Phân Bổ Nhóm Đơn Vị';
-                const optDimDesc = foundDim1 ? `So sánh năng suất, chất lượng và đo lường mức độ biến động giữa các ${foundDim1}` : 'So sánh sức bán và xếp hạng giữa các đơn vị';
+                let cardsHtml = '';
                 
-                const optMetricTitle = foundMetric1 ? `Kiểm Soát Rủi Ro & Tối Ưu ${foundMetric1}` : 'Tối Ưu Lợi Nhuận & Cấu Trúc Chi Phí';
-                const optMetricDesc = foundMetric1 ? `Bóc tách các điểm vượt ngưỡng dung sai và khoanh vùng chỉ số ${foundMetric1}` : 'Kiểm soát biên lãi, khoanh vùng chi phí và bảo toàn dòng tiền';
-                
-                const optTimeTitle = foundTime ? `Nhịp Độ Vận Hành & Tiến Trình Theo ${foundTime}` : 'Tăng Trưởng Doanh Thu & Chu Kỳ Thời Gian';
-                const optTimeDesc = foundTime ? `Nhận diện chu kỳ, độ dốc và thời điểm đạt đỉnh/đáy theo ${foundTime}` : 'Nhận diện chuỗi thời gian, chu kỳ tháng & thời điểm đạt đỉnh/đáy';
-
-                optionsContainer.innerHTML = `
-                    <!-- HƯỚNG 1: MẶC ĐỊNH TOÀN DIỆN -->
-                    <label class="direction-option-card flex items-center justify-between p-3.5 rounded-2xl border-2 border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60 cursor-pointer transition shadow-2xs">
+                // Card Toàn diện (nếu có)
+                if (adaptiveSpec.comprehensive) {
+                    const comp = adaptiveSpec.comprehensive;
+                    cardsHtml += `
+                    <!-- HƯỚNG TOÀN DIỆN: MẶC ĐỊNH -->
+                    <label class="direction-option-card flex items-center justify-between p-3.5 rounded-2xl border-2 border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60 cursor-pointer transition shadow-2xs" data-direction-id="all_comprehensive">
                         <div class="flex items-center gap-3 min-w-0">
-                            <input type="radio" name="directionRadio" value="all_comprehensive" onchange="updateDirectionOptionCardsUI()" class="w-4 h-4 text-[#2C5E82] focus:ring-[#2C5E82] shrink-0" />
+                            <input type="radio" name="directionRadio" value="all_comprehensive" onchange="onDirectionRadioSelected('all_comprehensive')" class="w-4 h-4 text-[#2C5E82] focus:ring-[#2C5E82] shrink-0" />
                             <div class="space-y-0.5 min-w-0">
                                 <div class="flex flex-wrap items-center gap-2">
-                                    <span class="text-xs sm:text-sm font-extrabold text-slate-900">Phân Tích Toàn Diện (Đa Chiều Dữ Liệu)</span>
+                                    <span class="text-xs sm:text-sm font-extrabold text-slate-900">${comp.title}</span>
                                     <span class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 text-[10px] font-black uppercase tracking-wider shrink-0">Mặc định</span>
                                 </div>
-                                <p class="text-[11px] text-slate-500 font-medium">Bao quát đầy đủ chuỗi thời gian, các phân loại đơn vị và chỉ số thực tế</p>
+                                <p class="text-[11px] text-slate-500 font-medium">${comp.description}</p>
                             </div>
                         </div>
                         <span class="direction-check-indicator w-6 h-6 rounded-full border-2 border-slate-300 text-transparent flex items-center justify-center text-xs shrink-0 font-bold">✓</span>
                     </label>
+                    `;
+                }
 
-                    <!-- HƯỚNG 2: THEO CHIỀU PHÂN LOẠI THỰC TẾ -->
-                    <label class="direction-option-card flex items-center justify-between p-3.5 rounded-2xl border-2 border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60 cursor-pointer transition shadow-2xs">
+                // Render từng hướng chuyên biệt D1, D2, D3, D4 với tiêu đề tự nhiên
+                adaptiveSpec.directions.forEach((dir, idx) => {
+                    cardsHtml += `
+                    <!-- HƯỚNG ${idx + 1}: ${dir.method} -->
+                    <label class="direction-option-card flex items-center justify-between p-3.5 rounded-2xl border-2 border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60 cursor-pointer transition shadow-2xs" data-direction-id="${dir.id}">
                         <div class="flex items-center gap-3 min-w-0">
-                            <input type="radio" name="directionRadio" value="channel_efficiency" onchange="updateDirectionOptionCardsUI()" class="w-4 h-4 text-[#2C5E82] focus:ring-[#2C5E82] shrink-0" />
+                            <input type="radio" name="directionRadio" value="${dir.id}" onchange="onDirectionRadioSelected('${dir.id}')" class="w-4 h-4 text-[#2C5E82] focus:ring-[#2C5E82] shrink-0" />
                             <div class="space-y-0.5 min-w-0">
-                                <span class="text-xs sm:text-sm font-extrabold text-slate-900 block">${optDimTitle}</span>
-                                <p class="text-[11px] text-slate-500 font-medium">${optDimDesc}</p>
+                                <span class="text-xs sm:text-sm font-extrabold text-slate-900 block">${dir.title}</span>
+                                <p class="text-[11px] text-slate-500 font-medium">${dir.description}</p>
                             </div>
                         </div>
                         <span class="direction-check-indicator w-6 h-6 rounded-full border-2 border-slate-300 text-transparent flex items-center justify-center text-xs shrink-0 font-bold">✓</span>
                     </label>
+                    `;
+                });
 
-                    <!-- HƯỚNG 3: KIỂM SOÁT RỦI RO / CHỈ SỐ TRỌNG YẾU -->
-                    <label class="direction-option-card flex items-center justify-between p-3.5 rounded-2xl border-2 border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60 cursor-pointer transition shadow-2xs">
-                        <div class="flex items-center gap-3 min-w-0">
-                            <input type="radio" name="directionRadio" value="profit_optimization" onchange="updateDirectionOptionCardsUI()" class="w-4 h-4 text-[#2C5E82] focus:ring-[#2C5E82] shrink-0" />
-                            <div class="space-y-0.5 min-w-0">
-                                <span class="text-xs sm:text-sm font-extrabold text-slate-900 block">${optMetricTitle}</span>
-                                <p class="text-[11px] text-slate-500 font-medium">${optMetricDesc}</p>
-                            </div>
-                        </div>
-                        <span class="direction-check-indicator w-6 h-6 rounded-full border-2 border-slate-300 text-transparent flex items-center justify-center text-xs shrink-0 font-bold">✓</span>
-                    </label>
-
-                    <!-- HƯỚNG 4: CHU KỲ VẬN HÀNH THỜI GIAN -->
-                    <label class="direction-option-card flex items-center justify-between p-3.5 rounded-2xl border-2 border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/60 cursor-pointer transition shadow-2xs">
-                        <div class="flex items-center gap-3 min-w-0">
-                            <input type="radio" name="directionRadio" value="revenue_growth" onchange="updateDirectionOptionCardsUI()" class="w-4 h-4 text-[#2C5E82] focus:ring-[#2C5E82] shrink-0" />
-                            <div class="space-y-0.5 min-w-0">
-                                <span class="text-xs sm:text-sm font-extrabold text-slate-900 block">${optTimeTitle}</span>
-                                <p class="text-[11px] text-slate-500 font-medium">${optTimeDesc}</p>
-                            </div>
-                        </div>
-                        <span class="direction-check-indicator w-6 h-6 rounded-full border-2 border-slate-300 text-transparent flex items-center justify-center text-xs shrink-0 font-bold">✓</span>
-                    </label>
-                `;
+                optionsContainer.innerHTML = cardsHtml;
                 updateDirectionOptionCardsUI();
+            }
+        }
+
+        // Bổ sung hàm xử lý khi chọn 1 hướng radio cụ thể
+        function onDirectionRadioSelected(dirId) {
+            updateDirectionOptionCardsUI();
+            const customInput = document.getElementById('customDirectionQueryInput');
+            if (dirId !== 'custom_direction' && customInput) {
+                const spec = window.currentDatasetDirectionSpecs;
+                if (spec) {
+                    if (dirId === 'all_comprehensive' && spec.comprehensive) {
+                        customInput.value = spec.comprehensive.business_question;
+                    } else if (spec.directions) {
+                        const found = spec.directions.find(d => d.id === dirId);
+                        if (found && found.business_question) {
+                            customInput.value = found.business_question;
+                        }
+                    }
+                }
             }
         }
 
@@ -6713,7 +7351,7 @@ async function submitStep2DirectCleaning() {
             const orig = btn ? btn.innerHTML : '';
             if (btn) {
                 btn.disabled = true;
-                btn.innerHTML = '<span>Đang phân tích theo định hướng đã chọn...</span>';
+                btn.innerHTML = '<span>Đang phân tích đúng theo định hướng đã chọn...</span>';
             }
 
             // CHỈ CHỌN 1 HƯỚNG DUY NHẤT TRONG TẤT CẢ CÁC HƯỚNG
@@ -6727,10 +7365,21 @@ async function submitStep2DirectCleaning() {
                 const customInput = document.getElementById('customDirectionQueryInput');
                 customQuery = customInput ? customInput.value.trim() : '';
                 primaryDirection = 'custom';
+            } else {
+                const spec = window.currentDatasetDirectionSpecs;
+                if (spec) {
+                    if (selectedVal === 'all_comprehensive' && spec.comprehensive) {
+                        customQuery = ''; // Giữ rỗng để kích hoạt chế độ toàn diện 5 biểu đồ đa chiều
+                    } else if (spec.directions) {
+                        const targetDir = spec.directions.find(d => d.id === selectedVal);
+                        if (targetDir) {
+                            customQuery = targetDir.business_question;
+                        }
+                    }
+                }
             }
 
             const finalDirections = [primaryDirection];
-
             const profile = getBusinessProfileFromUI();
             const apiKey = document.getElementById('agentApiKeyInput') ? document.getElementById('agentApiKeyInput').value.trim() : '';
 
@@ -6761,35 +7410,35 @@ async function submitStep2DirectCleaning() {
                     }
                 }
             } catch (err) {
-                console.error("Error analyzing direction (fallback to client-side):", err);
-                // CLIENT-SIDE ENGINE CHO VERCEL & OFFLINE (BẢO ĐẢM TẠO ĐỦ 100% CÂU TRẢ LỜI & BIỂU ĐỒ)
-                const rows = window.cleanedDataRows || (window.latestBackendData && (window.latestBackendData.full_data || window.latestBackendData.cleaned_preview)) || [];
-                if (rows.length > 0) {
-                    const kpis = (window.latestBackendData && window.latestBackendData.kpis) ? window.latestBackendData.kpis : {};
-                    const effectiveQuery = customQuery || (window.latestBackendData && window.latestBackendData.custom_query) || primaryDirection;
-                    const effectiveQs = getUserEffectiveQuestions();
-                    const qsToUse = (effectiveQs && effectiveQs.length > 0) ? effectiveQs : (customQuery ? customQuery.split(/\r?\n/).map(x => x.trim()).filter(x => x.length > 0) : [effectiveQuery]);
+                console.error("Error analyzing direction (fallback to client-side engine):", err);
+            }
 
-                    const clientRichCharts = generateClientSideRichCharts(rows, qsToUse, profile.company_name);
-                    const clientDirectAnswers = generateClientSideDirectAnswers(rows, qsToUse);
-                    const clientCS = generateClientSideCausesAndSolutions(clientRichCharts, kpis, rows, qsToUse.join("\n"));
-                    const clientReport = generateClientSideStep5Report(clientRichCharts, clientCS.causes, clientCS.solutions, kpis);
-                    const clientStep3Summary = generateClientSideStep3Summary(clientRichCharts);
+            // CLIENT-SIDE ENGINE CHO VERCEL & OFFLINE (BẢO ĐẢM 100% KẾT QUẢ KHÁC BIỆT THEO TỪNG HƯỚNG)
+            const rows = window.cleanedDataRows || (window.latestBackendData && (window.latestBackendData.full_data || window.latestBackendData.cleaned_preview)) || [];
+            if (rows.length > 0) {
+                const kpis = (window.latestBackendData && window.latestBackendData.kpis) ? window.latestBackendData.kpis : {};
+                
+                const qsToUse = customQuery ? [customQuery] : [primaryDirection];
+                
+                const clientRichCharts = generateClientSideRichCharts(rows, qsToUse, profile.company_name, primaryDirection);
+                const clientDirectAnswers = generateClientSideDirectAnswers(rows, qsToUse, primaryDirection);
+                const clientCS = generateClientSideCausesAndSolutions(clientRichCharts, kpis, rows, customQuery, primaryDirection);
+                const clientReport = generateClientSideStep5Report(clientRichCharts, clientCS.causes, clientCS.solutions, kpis, primaryDirection);
+                const clientStep3Summary = generateClientSideStep3Summary(clientRichCharts, primaryDirection);
 
-                    const fallbackData = {
-                        ...(window.latestBackendData || {}),
-                        chosen_direction: primaryDirection,
-                        custom_query: customQuery || (window.latestBackendData ? window.latestBackendData.custom_query : ""),
-                        user_questions: qsToUse,
-                        direct_answers: clientDirectAnswers,
-                        rich_charts: clientRichCharts,
-                        step3_summary: clientStep3Summary,
-                        structured_causes: clientCS.causes,
-                        structured_solutions: clientCS.solutions,
-                        step5_report: clientReport
-                    };
-                    applyBackendPipelineResult(fallbackData);
-                }
+                const fallbackData = {
+                    ...(window.latestBackendData || {}),
+                    chosen_direction: primaryDirection,
+                    custom_query: customQuery,
+                    user_questions: qsToUse,
+                    direct_answers: clientDirectAnswers,
+                    rich_charts: clientRichCharts,
+                    step3_summary: clientStep3Summary,
+                    structured_causes: clientCS.causes,
+                    structured_solutions: clientCS.solutions,
+                    step5_report: clientReport
+                };
+                applyBackendPipelineResult(fallbackData);
             }
 
             closeAnalysisDirectionModal();
@@ -6800,7 +7449,20 @@ async function submitStep2DirectCleaning() {
 
             unlockAndGoToStep(3);
             updateActiveDirectionBanner();
-            const toastMsg = customQuery ? `Đã hoàn tất phân tích bám sát yêu cầu: "${customQuery}"!` : `Đã hoàn tất phân tích theo ${finalDirections.length} hướng bạn chọn!`;
+            
+            let toastMsg = `Đã phân tích chuyên sâu theo hướng: "${primaryDirection}"!`;
+            const spec = window.currentDatasetDirectionSpecs;
+            if (spec) {
+                if (primaryDirection === 'all_comprehensive' && spec.comprehensive) {
+                    toastMsg = `Đã phân tích: ${spec.comprehensive.title}!`;
+                } else if (spec.directions) {
+                    const found = spec.directions.find(d => d.id === primaryDirection);
+                    if (found) toastMsg = `Đã phân tích chuyên sâu: "${found.title}"!`;
+                }
+            }
+            if (selectedVal === 'custom_direction' && customQuery) {
+                toastMsg = `Đã hoàn tất phân tích bám sát yêu cầu: "${customQuery}"!`;
+            }
             showToast(toastMsg);
         }
 

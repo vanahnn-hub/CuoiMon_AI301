@@ -563,7 +563,11 @@ def set_analyze_direction(req: AnalyzeDirectionRequest):
         "channel_efficiency": "Đánh giá hiệu suất theo phân loại đơn vị",
         "profit_optimization": "Kiểm soát rủi ro, tối ưu lợi nhuận & chi phí",
         "revenue_growth": "Tăng trưởng doanh thu & chu kỳ vận hành thời gian",
-        "all_comprehensive": "Phân tích toàn diện đa chiều dữ liệu"
+        "all_comprehensive": "Phân tích toàn diện đa chiều dữ liệu",
+        "d1": "Cơ cấu doanh thu đóng góp theo từng khu vực",
+        "d2": "Xếp hạng lợi nhuận và nhận diện các cửa hàng thua lỗ",
+        "d3": "Xu hướng và biến động doanh thu qua các tháng",
+        "d4": "Đối chiếu tương quan giữa doanh thu và chi phí hoạt động"
     }
     if len(selected_dirs) > 1:
         extra_desc = "Phân tích kết hợp đa hướng: " + ", ".join([dir_labels.get(d, d) for d in selected_dirs])
