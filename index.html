@@ -2182,6 +2182,28 @@
     <!-- ===================================================================== -->
     <script>
         // CÁC HÀM TIỆN ÍCH TOÀN CỤC BẢO ĐẢM TOÀN BỘ HỆ THỐNG LUÔN TRUY CẬP ĐƯỢC
+        function normalizeFuzzyToken(val) {
+            if (val === null || val === undefined) return "";
+            const text = String(val)
+                .normalize("NFD")
+                .replace(/[\u0300-\u036f]/g, "")
+                .replace(/đ/g, "d").replace(/Đ/g, "D")
+                .toLowerCase();
+            let res = "";
+            for (let i = 0; i < text.length; i++) {
+                const ch = text[i];
+                if (ch === "o" || ch === "0") {
+                    res += "0";
+                } else if (ch === "i" || ch === "l" || ch === "1" || ch === "|") {
+                    res += "1";
+                } else if (/[a-z0-9]/.test(ch)) {
+                    res += ch;
+                }
+            }
+            return res;
+        }
+        window.normalizeFuzzyToken = normalizeFuzzyToken;
+
         function stripAcc(str) {
             return String(str || '').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').toLowerCase();
         }
@@ -4712,6 +4734,156 @@
             });
         }
 
+        function validateBusinessDataQuality(rawRows, fileName, isGSheet = false) {
+            const prefix = isGSheet ? "Bảng tính Google Sheet" : "Tệp";
+            
+            // 1. Kiểm tra File rỗng
+            if (!rawRows || !Array.isArray(rawRows) || rawRows.length === 0) {
+                return {
+                    ok: false,
+                    title: isGSheet ? "Lỗi Dữ Liệu Không Có Ý Nghĩa Kinh Doanh" : "Lỗi Tệp Rỗng",
+                    message: `${prefix} "${fileName}" hoàn toàn không chứa dòng dữ liệu nào.`,
+                    guide: "Vui lòng kiểm tra lại bảng tính, đảm bảo bảng có các dòng dữ liệu kinh doanh trước khi tải lên.",
+                    badge: isGSheet ? "Dữ Liệu Vô Nghĩa" : "Tệp Rỗng"
+                };
+            }
+
+            const firstRow = rawRows[0] || {};
+            const colKeys = Object.keys(firstRow).filter(k => k !== "__rowNum__");
+
+            // 2. Kiểm tra Vượt quá 200 cột
+            if (colKeys.length > 200) {
+                return {
+                    ok: false,
+                    title: "Lỗi Vượt Quá 200 Cột",
+                    message: `${prefix} "${fileName}" chứa ${colKeys.length} cột, vượt quá giới hạn tối đa cho phép (200 cột).`,
+                    guide: "Vui lòng loại bỏ bớt các cột thừa để tệp có tối đa 200 cột.",
+                    badge: "Vượt 200 Cột"
+                };
+            }
+
+            // 3. Kiểm tra Vượt quá 20.000 dòng
+            if (rawRows.length > 20000) {
+                return {
+                    ok: false,
+                    title: "Lỗi Vượt Quá 20.000 Dòng",
+                    message: `${prefix} "${fileName}" chứa ${rawRows.length.toLocaleString()} dòng dữ liệu, vượt quá giới hạn tối đa cho phép (20.000 dòng).`,
+                    guide: "Vui lòng lọc bớt dữ liệu hoặc chia nhỏ tệp để bảng có tối đa 20.000 dòng.",
+                    badge: "Vượt 20.000 Dòng"
+                };
+            }
+
+            // 4. KIỂM TRA DỮ LIỆU KHÔNG CÓ Ý NGHĨA KINH DOANH
+            // 4a. Quá ít dòng (< 2 dòng)
+            if (rawRows.length < 2) {
+                return {
+                    ok: false,
+                    title: "Lỗi Dữ Liệu Không Có Ý Nghĩa Kinh Doanh",
+                    message: `Bảng dữ liệu "${fileName}" chỉ có ${rawRows.length} dòng dữ liệu, không đủ số lượng tối thiểu để phân tích (yêu cầu tối thiểu từ 2 dòng trở lên).`,
+                    guide: "Vui lòng kiểm tra lại bảng tính, đảm bảo có từ 2 dòng dữ liệu trở lên để phục vụ đối chiếu và phân tích.",
+                    badge: "Dữ Liệu Vô Nghĩa"
+                };
+            }
+
+            // 4b. Toàn bộ ô trong bảng chỉ chứa rỗng/khoảng trắng
+            const invalidTokens = new Set(["", "nan", "none", "null", "undefined", "n/a", "na", "#n/a", "0 bytes"]);
+            const allValues = [];
+            colKeys.forEach(col => {
+                rawRows.forEach(r => {
+                    const v = r[col];
+                    if (v !== null && v !== undefined) {
+                        const s = String(v).trim().toLowerCase();
+                        if (!invalidTokens.has(s)) {
+                            allValues.push(s);
+                        }
+                    }
+                });
+            });
+
+            if (allValues.length === 0) {
+                return {
+                    ok: false,
+                    title: "Lỗi Dữ Liệu Không Có Ý Nghĩa Kinh Doanh",
+                    message: `Toàn bộ các ô trong ${prefix.toLowerCase()} "${fileName}" đều là khoảng trắng hoặc không có giá trị thực tế.`,
+                    guide: "Vui lòng kiểm tra lại nội dung bảng tính, điền dữ liệu kinh doanh thực tế trước khi tải lên.",
+                    badge: "Dữ Liệu Vô Nghĩa"
+                };
+            }
+
+            // 4c. Toàn bộ bảng chỉ chứa cùng 1 giá trị lặp lại (không có biến thiên)
+            const uniqueAll = new Set(allValues);
+            if (uniqueAll.size <= 1) {
+                const sampleVal = Array.from(uniqueAll)[0] || "";
+                return {
+                    ok: false,
+                    title: "Lỗi Dữ Liệu Không Có Ý Nghĩa Kinh Doanh",
+                    message: `Toàn bộ dữ liệu trong bảng đều là cùng một giá trị lặp lại ('${sampleVal}'), không có sự biến thiên để phân tích kinh doanh.`,
+                    guide: "Hệ thống phân tích kinh doanh cần dữ liệu có sự biến động giữa các bản ghi (ví dụ: các đơn hàng, doanh thu, kênh bán khác nhau). Vui lòng tải lên bảng dữ liệu kinh doanh thực tế.",
+                    badge: "Dữ Liệu Vô Nghĩa"
+                };
+            }
+
+            // 4d. Tất cả các cột đều là giá trị cố định (mỗi cột chỉ có 1 giá trị duy nhất)
+            let hasVariableColumn = false;
+            colKeys.forEach(col => {
+                const colVals = new Set();
+                for (let i = 0; i < rawRows.length; i++) {
+                    const v = rawRows[i][col];
+                    if (v !== null && v !== undefined && String(v).trim().length > 0) {
+                        colVals.add(String(v).trim().toLowerCase());
+                        if (colVals.size >= 2) {
+                            hasVariableColumn = true;
+                            break;
+                        }
+                    }
+                }
+            });
+
+            if (!hasVariableColumn) {
+                return {
+                    ok: false,
+                    title: "Lỗi Dữ Liệu Không Có Ý Nghĩa Kinh Doanh",
+                    message: `Tất cả các cột trong bảng đều là giá trị cố định không đổi qua các dòng, không có dữ liệu biến thiên thực tế để đo lường và phân tích kinh doanh.`,
+                    guide: "Vui lòng kiểm tra lại bảng tính, đảm bảo dữ liệu ghi nhận các giao dịch, khách hàng hoặc biến động thực tế qua thời gian.",
+                    badge: "Dữ Liệu Vô Nghĩa"
+                };
+            }
+
+            // 4e. Kiểm tra cột có ý nghĩa kinh doanh (phải có chỉ số định lượng hoặc chiều phân loại)
+            let hasNumericCol = false;
+            let hasCategoricalCol = false;
+            colKeys.forEach(col => {
+                let numCount = 0;
+                const catVals = new Set();
+                rawRows.slice(0, 50).forEach(r => {
+                    const val = r[col];
+                    if (val !== null && val !== undefined && String(val).trim() !== "") {
+                        const num = parseCleanNumberOrNaN(val);
+                        if (!isNaN(num)) numCount++;
+                        catVals.add(String(val).trim());
+                    }
+                });
+                if (numCount >= Math.min(3, Math.max(1, rawRows.length * 0.3))) {
+                    hasNumericCol = true;
+                } else if (catVals.size >= 2) {
+                    hasCategoricalCol = true;
+                }
+            });
+
+            if (!hasNumericCol && !hasCategoricalCol) {
+                return {
+                    ok: false,
+                    title: "Lỗi Dữ Liệu Không Có Ý Nghĩa Kinh Doanh",
+                    message: `Bảng dữ liệu "${fileName}" không chứa chỉ số định lượng (doanh thu, số lượng, chi phí, giá trị...) hoặc chiều phân loại hợp lệ để hệ thống phân tích.`,
+                    guide: "Hệ thống hỗ trợ phân tích dữ liệu kinh doanh. Vui lòng tải lên bảng tính có chứa các cột thông tin kinh doanh rõ ràng.",
+                    badge: "Dữ Liệu Vô Nghĩa"
+                };
+            }
+
+            return { ok: true };
+        }
+        window.validateBusinessDataQuality = validateBusinessDataQuality;
+
         async function processUploadedFile(file) {
             hideStep1Error();
             if (!file) return;
@@ -4985,37 +5157,18 @@
                     return;
                 }
 
+                const dataQuality = validateBusinessDataQuality(rawRows, file.name, false);
+                if (!dataQuality.ok) {
+                    showStep1Error(
+                        dataQuality.title,
+                        dataQuality.message,
+                        `<b>Hướng dẫn khắc phục:</b> ${dataQuality.guide}`,
+                        dataQuality.badge
+                    );
+                    return;
+                }
                 const firstRow = rawRows[0] || {};
                 const colKeys = Object.keys(firstRow);
-                if (colKeys.length > 200) {
-                    showStep1Error(
-                        'Lỗi Vượt Quá 200 Cột',
-                        `Tệp "${file.name}" chứa ${colKeys.length} cột, vượt quá giới hạn tối đa cho phép (200 cột).`,
-                        '<b>Hướng dẫn khắc phục:</b> Vui lòng loại bỏ bớt các cột thừa để tệp có tối đa 200 cột.',
-                        'Vượt 200 Cột'
-                    );
-                    return;
-                }
-
-                if (rawRows.length > 20000) {
-                    showStep1Error(
-                        'Lỗi Vượt Quá 20.000 Dòng',
-                        `Tệp "${file.name}" chứa ${rawRows.length.toLocaleString()} dòng dữ liệu, vượt quá giới hạn tối đa cho phép (20.000 dòng).`,
-                        '<b>Hướng dẫn khắc phục:</b> Vui lòng lọc bớt dữ liệu hoặc chia nhỏ tệp để bảng có tối đa 20.000 dòng.',
-                        'Vượt 20.000 Dòng'
-                    );
-                    return;
-                }
-
-                if (rawRows.length < 2) {
-                    showStep1Error(
-                        'Lỗi Dữ Liệu Không Đủ Dòng',
-                        `Tệp "${file.name}" chỉ có ${rawRows.length} dòng dữ liệu, cần tối thiểu từ 2 dòng trở lên để phân tích.`,
-                        '<b>Hướng dẫn khắc phục:</b> Vui lòng kiểm tra lại bảng tính, đảm bảo có từ 2 dòng dữ liệu trở lên.',
-                        'Dữ Liệu Vô Nghĩa'
-                    );
-                    return;
-                }
 
                 // Tự động gợi ý điền thông minh Bối cảnh doanh nghiệp nếu còn trống
                 const nameEl = document.getElementById('bizCompanyNameInput');
@@ -5851,8 +6004,19 @@
                 if (result.type === 'pipeline') {
                     pipelineData = result.data;
                 } else {
+                    const sheetName = `GoogleSheet_${sheetId.slice(0, 6)}`;
+                    const dataQuality = validateBusinessDataQuality(result.rows, sheetName, true);
+                    if (!dataQuality.ok) {
+                        showStep1Error(
+                            dataQuality.title,
+                            dataQuality.message,
+                            `<b>Hướng dẫn khắc phục:</b> ${dataQuality.guide}`,
+                            dataQuality.badge
+                        );
+                        return;
+                    }
                     window.uploadedRawData = JSON.parse(JSON.stringify(result.rows));
-                pipelineData = buildClientSidePipelineFromRows(result.rows, `GoogleSheet_${sheetId.slice(0, 6)}`);
+                    pipelineData = buildClientSidePipelineFromRows(result.rows, sheetName);
                 }
                 applyBackendPipelineResult(pipelineData);
                 const liveStatusOk = document.getElementById('fileUploadLiveStatus');
@@ -7801,85 +7965,100 @@
 
 async function submitStep2DirectCleaning() {
             const input = document.getElementById('step2UserCleaningInput');
-            const userReq = input ? input.value.trim() : '';
+            const userReq = input ? input.value.trim() : "";
             if (!userReq) {
-                showToast('Vui lòng nhập yêu cầu làm sạch của bạn.');
+                showToast("Vui lòng nhập yêu cầu làm sạch của bạn.");
                 return;
             }
 
             const btn = document.getElementById('btnApplyStep2UserCleaning');
-            const orig = btn ? btn.innerHTML : '';
+            const orig = btn ? btn.innerHTML : "";
             if (btn) {
                 btn.disabled = true;
-                btn.innerHTML = '<span>Đang xử lý theo yêu cầu...</span>';
+                btn.innerHTML = "<span>Đang xử lý theo yêu cầu...</span>";
             }
-
-            const apiKey = document.getElementById('agentApiKeyInput') ? document.getElementById('agentApiKeyInput').value.trim() : '';
-            let success = false;
-            let returnedData = null;
 
             try {
-                if (window.location.protocol.startsWith('http') && !window.location.hostname.includes('googleusercontent')) {
-                    const res = await fetch('/api/reclean', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            handle_missing: 'impute',
-                            drop_duplicates: true,
-                            standardize_columns: true,
-                            user_request: userReq,
-                            api_key: apiKey || null
-                        })
-                    });
-                    if (res.ok) {
-                        returnedData = await res.json();
-                        applyBackendPipelineResult(returnedData);
-                        success = true;
+                const apiKey = document.getElementById('agentApiKeyInput') ? document.getElementById('agentApiKeyInput').value.trim() : "";
+                let success = false;
+                let returnedData = null;
+
+                const isLocalDevBackend = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' || window.location.port === '8000');
+                if (window.location.protocol.startsWith('http') && isLocalDevBackend && !window.location.hostname.includes('googleusercontent')) {
+                    try {
+                        const res = await fetch('/api/reclean', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                handle_missing: 'impute',
+                                drop_duplicates: true,
+                                standardize_columns: true,
+                                user_request: userReq,
+                                api_key: apiKey || null
+                            })
+                        });
+                        if (res.ok) {
+                            const contentType = res.headers.get('content-type') || "";
+                            if (contentType.includes('application/json')) {
+                                returnedData = await res.json();
+                                applyBackendPipelineResult(returnedData);
+                                success = true;
+                            }
+                        }
+                    } catch (err) {
+                        console.warn('Direct reclean error:', err);
                     }
                 }
+
+                if (!success) {
+                    let baseRows = window.cleanedDataRows || (window.latestBackendData && (window.latestBackendData.full_data || window.latestBackendData.cleaned_preview)) || [];
+                    if (!baseRows || baseRows.length === 0) {
+                        const ds = SAMPLE_DATASETS[activeDatasetKey] || SAMPLE_DATASETS['custom'] || SAMPLE_DATASETS['retail'] || {};
+                        baseRows = ds.previewRows ? JSON.parse(JSON.stringify(ds.previewRows)) : [];
+                    }
+                    const cleanRes = applyCleaningClient(baseRows, userReq);
+                    window.cleanedDataRows = cleanRes.rows;
+                    if (window.latestBackendData) {
+                        window.latestBackendData.cleaned_preview = cleanRes.rows.slice(0, 15);
+                        window.latestBackendData.full_data = cleanRes.rows;
+                        window.latestBackendData.total_rows_after = cleanRes.rows.length;
+                        window.latestBackendData.total_cols_after = cleanRes.columns.length;
+                        window.latestBackendData.columns = cleanRes.columns;
+                    }
+                    renderPreviewTable(cleanRes.rows.slice(0, 15), cleanRes.columns);
+
+                    const countEl = document.getElementById('step2FormatCardSubtitle');
+                    if (countEl) countEl.innerText = `${cleanRes.rows.length} dòng × ${cleanRes.columns.length} cột`;
+                    const countBtn = document.getElementById('btnViewAllCleanedModal');
+                    if (countBtn) countBtn.innerText = `Xem toàn bộ dữ liệu (${cleanRes.rows.length} dòng)`;
+
+                    showToast(`Đã làm sạch: ${cleanRes.message}`);
+                    success = true;
+                }
+
+                // Hiển thị nút khôi phục
+                const btnRestore = document.getElementById('btnStep2Restore');
+                if (btnRestore) btnRestore.classList.remove('hidden');
+                const btnRestoreMain = document.getElementById('btnRestoreOriginalClean');
+                if (btnRestoreMain) btnRestoreMain.classList.remove('hidden');
+
+                const notice = document.getElementById('recleanAppliedNotice');
+                const noticeText = document.getElementById('recleanAppliedNoticeText');
+                if (notice && noticeText) {
+                    noticeText.innerHTML = `Đã làm sạch lại theo đúng yêu cầu: <b>"${userReq}"</b>. Bảng xem trước đã được cập nhật trực tiếp.`;
+                    notice.classList.remove('hidden');
+                }
+
+                showToast('Đã làm sạch lại theo đúng yêu cầu!');
             } catch (err) {
-                console.warn('Direct reclean error:', err);
-            }
-
-            if (!success) {
-                let baseRows = window.cleanedDataRows || (window.latestBackendData && (window.latestBackendData.full_data || window.latestBackendData.cleaned_preview)) || [];
-                if (!baseRows || baseRows.length === 0) {
-                    const ds = SAMPLE_DATASETS[activeDatasetKey] || SAMPLE_DATASETS['custom'] || SAMPLE_DATASETS['retail'] || {};
-                    baseRows = ds.previewRows ? JSON.parse(JSON.stringify(ds.previewRows)) : [];
+                console.error('Lỗi thực hiện làm sạch:', err);
+                showToast('Lỗi: ' + (err.message || err));
+            } finally {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = orig;
                 }
-                const cleanRes = applyCleaningClient(baseRows, userReq);
-                window.cleanedDataRows = cleanRes.rows;
-                if (window.latestBackendData) {
-                    window.latestBackendData.cleaned_preview = cleanRes.rows.slice(0, 15);
-                    window.latestBackendData.full_data = cleanRes.rows;
-                    window.latestBackendData.total_rows_after = cleanRes.rows.length;
-                    window.latestBackendData.total_cols_after = cleanRes.columns.length;
-                    window.latestBackendData.columns = cleanRes.columns;
-                }
-                renderPreviewTable(cleanRes.rows.slice(0, 15), cleanRes.columns);
-                showToast(`Đã làm sạch: ${cleanRes.message}`);
-                success = true;
             }
-
-            if (btn) {
-                btn.disabled = false;
-                btn.innerHTML = orig;
-            }
-
-            // Hiển thị nút khôi phục
-            const btnRestore = document.getElementById('btnStep2Restore');
-            if (btnRestore) btnRestore.classList.remove('hidden');
-            const btnRestoreMain = document.getElementById('btnRestoreOriginalClean');
-            if (btnRestoreMain) btnRestoreMain.classList.remove('hidden');
-
-            const notice = document.getElementById('recleanAppliedNotice');
-            const noticeText = document.getElementById('recleanAppliedNoticeText');
-            if (notice && noticeText) {
-                noticeText.innerHTML = `Đã làm sạch lại theo đúng yêu cầu: <b>"${userReq}"</b>. Bảng xem trước đã được cập nhật trực tiếp.`;
-                notice.classList.remove('hidden');
-            }
-
-            showToast('Đã làm sạch lại theo đúng yêu cầu!');
         }
 
         // CẬP NHẬT DỮ LIỆU TỪ BACKEND HOẶC MẪU
